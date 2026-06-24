@@ -50,10 +50,15 @@ class Arc2FaceGenerator:
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = torch.float16 if self._device == "cuda" else torch.float32
 
+        # Préfère les poids déjà déposés (Drive, pas de retéléchargement entre sessions) ;
+        # sinon retombe sur le Hub HuggingFace (portable, plus lent).
+        local_models_dir = Path(self.cfg["paths"].get("arc2face_models_dir", ""))
+        arc2face_source = str(local_models_dir) if local_models_dir.is_dir() else pretrained["arc2face_repo"]
+
         encoder = CLIPTextModelWrapper.from_pretrained(
-            pretrained["arc2face_repo"], subfolder="encoder", torch_dtype=dtype)
+            arc2face_source, subfolder="encoder", torch_dtype=dtype)
         unet = UNet2DConditionModel.from_pretrained(
-            pretrained["arc2face_repo"], subfolder="arc2face", torch_dtype=dtype)
+            arc2face_source, subfolder="arc2face", torch_dtype=dtype)
 
         pipeline = StableDiffusionPipeline.from_pretrained(
             pretrained["base_sd"], text_encoder=encoder, unet=unet,
@@ -65,6 +70,7 @@ class Arc2FaceGenerator:
 
         self._trainable_params = self._setup_adapter(pipeline.unet)
 
+        self._link_insightface_pack(pretrained["insightface_pack"])
         self._face_app = FaceAnalysis(
             name=pretrained["insightface_pack"],
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -75,6 +81,19 @@ class Arc2FaceGenerator:
         self._pipeline = pipeline
         log.info("Arc2FaceGenerator chargé (device=%s, adapter=%s, params entraînables=%d)",
                  self._device, self.adapter, sum(p.numel() for p in self._trainable_params))
+
+    def _link_insightface_pack(self, pack_name: str) -> None:
+        """Lie (symlink) un pack insightface déjà déposé (Drive) vers l'emplacement par
+        défaut attendu par FaceAnalysis (~/.insightface/models/<pack>), sans dupliquer
+        les fichiers. Sans effet si déjà présent ou si rien n'est déposé (fallback
+        normal d'insightface, qui échouera pour antelopev2 — non auto-téléchargeable)."""
+        local_pack_dir = Path(self.cfg["paths"].get("insightface_models_dir", "")) / pack_name
+        target = Path.home() / ".insightface" / "models" / pack_name
+        if target.exists() or not local_pack_dir.is_dir():
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(local_pack_dir, target_is_directory=True)
+        log.info("Pack insightface '%s' lié depuis %s -> %s", pack_name, local_pack_dir, target)
 
     def _setup_adapter(self, unet) -> list:
         """LoRA (visible/d1, cette itération) ou full_finetune (réservé IR, cf. CLAUDE.md)."""

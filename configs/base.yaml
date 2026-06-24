@@ -13,16 +13,20 @@ distance: d1                    # d1 (4.20m) | d2 (2.60m) | d3 (1.00m)
 # définir la variable d'environnement FORENSIC_SYNTH_ROOT (cf. src/config.py),
 # c'est le seul changement nécessaire pour changer d'environnement.
 paths:
-  drive_root: /content/drive/MyDrive/forensic-synth
+  drive_root: /content/drive/MyDrive/forensic_synth
   scface_root: ${paths.drive_root}/data/SCface_database
   blocks_file: ${paths.drive_root}/data/blocks.json   # partition A/B/C figée
   b1_testset_file: ${paths.drive_root}/data/b1_test_ids.txt  # 30 id -> Bloc C
   outputs: ${paths.drive_root}/outputs
   checkpoints: ${paths.drive_root}/checkpoints
   synth_dataset: ${paths.outputs}/synth/${modality}_${distance}
-  # poids ArcFace iresnet50/arcface_ms1mv3 (à déposer manuellement, cf. recognition.*) ;
-  # partagés par generator/identity_loss, fidelity/embedding et recognition/finetune.
-  arcface_weights: ${paths.drive_root}/pretrained/arcface_ms1mv3_r50.pth
+  # Assets pré-entraînés déposés manuellement (cf. generator.pretrained.* ci-dessous) :
+  #   pretrained/arcface/arcface_ms1mv3_r50.pth, pretrained/encoder/, pretrained/arc2face/,
+  #   pretrained/antelopev2/ — partagés par generator/, fidelity/ et recognition/.
+  pretrained_dir: ${paths.drive_root}/pretrained
+  arcface_weights: ${paths.pretrained_dir}/arcface/arcface_ms1mv3_r50.pth
+  arc2face_models_dir: ${paths.pretrained_dir}     # contient encoder/ et arc2face/ (sinon fallback HF Hub)
+  insightface_models_dir: ${paths.pretrained_dir}  # contient antelopev2/ (sinon fallback auto insightface)
 
 # --- Partition (anti-fuite) ---
 partition:
