@@ -1,0 +1,6 @@
+# Scénario ACTIF : visible, longue distance d1 (4.20m).
+defaults: base
+modality: visible
+distance: d1
+eval:
+  terrains: [["visible","d1"]]   # d2/d3 saturés -> ignorés

@@ -1,0 +1,24 @@
+# Cœur
+numpy
+pyyaml
+tqdm
+# Vision / DL (versions à figer par Claude Code selon l'env Colab)
+torch
+torchvision
+# Génération (Arc2Face = Stable Diffusion ; diffusers/peft pour la LoRA)
+diffusers
+transformers
+accelerate
+peft
+safetensors
+# Extraction de l'embedding ID de conditionnement (antelopev2, requis par Arc2Face)
+insightface
+onnxruntime-gpu
+# Pas sur PyPI : pip install git+https://github.com/foivospar/Arc2Face.git
+# (fournit CLIPTextModelWrapper, project_face_embs utilisés par src/generator/base_arc2face.py)
+# Reconnaissance / métriques
+scikit-learn
+scipy
+pytorch-fid
+# Tests
+pytest

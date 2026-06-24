@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+.venv/
+# Ne JAMAIS versionner données ni poids ni sorties
+data/raw/
+data/SCface_database/
+pretrained/
+outputs/
+checkpoints/
+*.ckpt
+*.safetensors
+*.pt
+*.npz
+runs/
+wandb/

@@ -1,0 +1,82 @@
+# Config de base — héritée par tous les scénarios. Surcharge par les fichiers spécifiques.
+project: forensic-synth
+seed: 42
+seeds: [42, 1234, 2025]        # multi-seed (recette B1)
+
+# --- Scénario (surchargé) ---
+modality: visible               # visible | ir
+distance: d1                    # d1 (4.20m) | d2 (2.60m) | d3 (1.00m)
+
+# --- Chemins (résolus par src/utils/paths.py) ---
+# drive_root = racine unique de TOUS les artefacts (data SCface, checkpoints, outputs).
+# Valeur par défaut = chemin Drive (Colab). En local, NE PAS éditer ce fichier :
+# définir la variable d'environnement FORENSIC_SYNTH_ROOT (cf. src/config.py),
+# c'est le seul changement nécessaire pour changer d'environnement.
+paths:
+  drive_root: /content/drive/MyDrive/forensic-synth
+  scface_root: ${paths.drive_root}/data/SCface_database
+  blocks_file: ${paths.drive_root}/data/blocks.json   # partition A/B/C figée
+  b1_testset_file: ${paths.drive_root}/data/b1_test_ids.txt  # 30 id -> Bloc C
+  outputs: ${paths.drive_root}/outputs
+  checkpoints: ${paths.drive_root}/checkpoints
+  synth_dataset: ${paths.outputs}/synth/${modality}_${distance}
+  # poids ArcFace iresnet50/arcface_ms1mv3 (à déposer manuellement, cf. recognition.*) ;
+  # partagés par generator/identity_loss, fidelity/embedding et recognition/finetune.
+  arcface_weights: ${paths.drive_root}/pretrained/arcface_ms1mv3_r50.pth
+
+# --- Partition (anti-fuite) ---
+partition:
+  block_a_size: 50   # entraînement générateurs
+  block_b_size: 50   # génération + validation fidélité
+  # Bloc C = b1_testset_file (30 id), jamais vu
+
+# --- Générateur ---
+generator:
+  backbone: arc2face          # base gelée, identité = embedding ArcFace
+  adapter: lora               # lora | full_finetune (full prévu pour l'IR)
+  pretrained:
+    base_sd: stable-diffusion-v1-5/stable-diffusion-v1-5   # HF Hub
+    arc2face_repo: FoivosPar/Arc2Face                       # HF Hub (subfolders encoder/arc2face)
+    insightface_pack: antelopev2                            # extraction embedding ID (conditionnement)
+  lora:
+    rank: 16
+    alpha: 16
+    target_modules: [to_q, to_k, to_v, to_out.0]  # couches attention UNet
+  identity_loss_weight: 0.5   # poids cosinus ArcFace
+  degrade_prior: true         # amorce Real-ESRGAN (aide la LoRA à atteindre la dégradation)
+  samples_per_identity: 20    # K : diversité intra-classe
+  train:
+    lr: 1.0e-4
+    max_steps: 4000
+    batch_size: 4
+    ckpt_every: 200           # reprenable
+    log_every: 50
+
+# --- Garde-fou de fidélité (go/no-go) ---
+fidelity:
+  fid_max: 60.0               # seuil à calibrer
+  cos_min: 0.45              # cosinus ArcFace min synth<->vrai (même id, Bloc B)
+  run_pilot: true
+
+# --- Reconnaissance (recette B1 INCHANGÉE) ---
+recognition:
+  backbone: iresnet50
+  pretrained: arcface_ms1mv3
+  scope: layer3_4            # meilleure stratégie B1 (dégèle layer3+layer4+bn2+fc+features)
+  optimizer: adamw
+  lr: 1.0e-4
+  weight_decay: 0.1
+  epochs: 20
+  batch_size: 32
+  ckpt_every: 200            # reprenable
+  log_every: 50
+  anchor_ratio: 0.5          # 50/50 mugshot/surveillance
+  conditions: [real, synthetic, mixed]
+  arcmargin:                 # tête ArcFace (cosine softmax à marge) pour l'entraînement
+    scale: 64.0
+    margin: 0.5
+
+# --- Évaluation ---
+eval:
+  metric: rank1
+  terrains: [["visible","d1"]]   # surchargé par scénario ; visible -> d1 SEULEMENT

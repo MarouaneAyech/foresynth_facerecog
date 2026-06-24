@@ -1,0 +1,9 @@
+# TEMPLATE (itération ultérieure) : infrarouge, distance d1.
+# Décalage spectral de haut rang -> envisager adapter: full_finetune (cf. B1).
+defaults: base
+modality: ir
+distance: d1
+generator:
+  adapter: lora          # TODO(claude): comparer lora vs full_finetune pour l'IR
+eval:
+  terrains: [["ir","d1"]]
