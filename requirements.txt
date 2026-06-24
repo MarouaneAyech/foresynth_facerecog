@@ -14,8 +14,9 @@ safetensors
 # Extraction de l'embedding ID de conditionnement (antelopev2, requis par Arc2Face)
 insightface
 onnxruntime-gpu
-# Pas sur PyPI : pip install git+https://github.com/foivospar/Arc2Face.git
-# (fournit CLIPTextModelWrapper, project_face_embs utilisés par src/generator/base_arc2face.py)
+einops   # dépendance du paquet arc2face (CLIPTextModelWrapper, project_face_embs)
+# Le dépôt foivospar/Arc2Face n'a pas de setup.py/pyproject.toml (pas pip-installable) :
+# il doit être cloné et ajouté au PYTHONPATH, cf. notebooks/colab_runner.ipynb (cellule 4).
 # Reconnaissance / métriques
 scikit-learn
 scipy
