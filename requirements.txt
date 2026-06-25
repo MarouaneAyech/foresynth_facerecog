@@ -6,10 +6,17 @@ tqdm
 torch
 torchvision
 # Génération (Arc2Face = Stable Diffusion ; diffusers/peft pour la LoRA)
-diffusers
-transformers
+# diffusers/transformers FIGÉS aux versions du requirements.txt officiel d'Arc2Face :
+# CLIPTextModelWrapper dépend de la structure interne de CLIPTextModel, qui a changé
+# entre versions de transformers -> tout autre version casse le chargement du checkpoint
+# (clés text_model.* non reconnues, cf. incident du 2026-06-25).
+# peft figé aussi : les versions récentes importent EncoderDecoderCache, absent de
+# transformers==4.36.0 -> ImportError. 0.7.1 = dernière version compatible vérifiée
+# (injection LoRA sur UNet2DConditionModel re-testée avec cette combinaison exacte).
+diffusers==0.29.2
+transformers==4.36.0
 accelerate
-peft
+peft==0.7.1
 safetensors
 # Extraction de l'embedding ID de conditionnement (antelopev2, requis par Arc2Face)
 insightface
