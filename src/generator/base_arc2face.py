@@ -67,7 +67,10 @@ class Arc2FaceGenerator:
         pipeline = pipeline.to(self._device)
         # Le scheduler n'est pas un nn.Module : pipeline.to(device) ne déplace pas
         # alphas_cumprod, indexé directement par fit() avec un tenseur GPU (timesteps).
-        pipeline.scheduler.alphas_cumprod = pipeline.scheduler.alphas_cumprod.to(self._device)
+        # Cast aussi le dtype (natif float32) : multiplié par noise_pred (float16 sur
+        # GPU), la promotion implicite vers float32 ferait planter vae.decode (attend du
+        # float16) avec un mismatch de type, même classe de bug que le device juste au-dessus.
+        pipeline.scheduler.alphas_cumprod = pipeline.scheduler.alphas_cumprod.to(self._device, dtype=dtype)
         pipeline.vae.requires_grad_(False)
         pipeline.text_encoder.requires_grad_(False)
 
@@ -107,7 +110,16 @@ class Arc2FaceGenerator:
             unet.add_adapter(LoraConfig(
                 r=lora_cfg["rank"], lora_alpha=lora_cfg["alpha"],
                 target_modules=lora_cfg["target_modules"]))
-            return [p for p in unet.parameters() if p.requires_grad]
+            trainable = [p for p in unet.parameters() if p.requires_grad]
+            # La LoRA est créée au dtype de la base (float16 sur GPU, cf. _ensure_loaded).
+            # Entraîner l'optimiseur (AdamW) directement en float16 sans GradScaler est
+            # instable (sous-débordement des moments d'Adam, NaN après quelques pas).
+            # Pattern officiel HF (examples/text_to_image/train_text_to_image_lora.py) :
+            # upcast les poids ENTRAÎNABLES en float32, la base gelée reste float16 ;
+            # peft gère nativement ce mélange de dtypes dans le forward (vérifié).
+            for p in trainable:
+                p.data = p.data.float()
+            return trainable
         if self.adapter == "full_finetune":
             # TODO(claude): chemin IR (cf. CLAUDE.md "Crochet IR") — non exercé en visible/d1.
             unet.requires_grad_(True)
