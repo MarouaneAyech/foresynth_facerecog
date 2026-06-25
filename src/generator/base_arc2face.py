@@ -73,6 +73,11 @@ class Arc2FaceGenerator:
         pipeline.scheduler.alphas_cumprod = pipeline.scheduler.alphas_cumprod.to(self._device, dtype=dtype)
         pipeline.vae.requires_grad_(False)
         pipeline.text_encoder.requires_grad_(False)
+        # Économie mémoire (entraînement = UNet forward+backward ET VAE decode+ArcFace
+        # avec gradients actifs pour la perte d'identité, simultanément en mémoire
+        # jusqu'à loss.backward() -> OOM observé même sur un T4 15 Go à batch_size=4).
+        pipeline.unet.enable_gradient_checkpointing()
+        pipeline.vae.enable_slicing()
 
         self._trainable_params = self._setup_adapter(pipeline.unet)
 
