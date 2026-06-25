@@ -80,6 +80,7 @@ class Arc2FaceGenerator:
         pipeline.vae.enable_slicing()
 
         self._trainable_params = self._setup_adapter(pipeline.unet)
+        self._load_latest_lora(pipeline.unet)
 
         self._face_app = load_face_app(self.cfg)
 
@@ -87,6 +88,20 @@ class Arc2FaceGenerator:
         self._pipeline = pipeline
         log.info("Arc2FaceGenerator chargé (device=%s, adapter=%s, params entraînables=%d)",
                  self._device, self.adapter, sum(p.numel() for p in self._trainable_params))
+
+    def _load_latest_lora(self, unet) -> None:
+        """Charge la LoRA déjà entraînée pour ce (modality, distance), si un checkpoint
+        existe. Appelé pour fit() (reprise) ET sample() — sans ça, sample() générerait
+        avec une LoRA fraîche/aléatoire, jamais celle entraînée par train_generator
+        (processus/session séparés -> les poids ne survivent pas autrement)."""
+        from peft import set_peft_model_state_dict
+        from src.utils.checkpoint import latest_checkpoint, load_checkpoint
+
+        tag = f"generator_{self.cfg['modality']}_{self.cfg['distance']}"
+        ckpt_path = latest_checkpoint(self.cfg["paths"]["checkpoints"], tag)
+        if ckpt_path is not None:
+            set_peft_model_state_dict(unet, load_checkpoint(ckpt_path)["lora"])
+            log.info("LoRA chargée depuis %s", ckpt_path)
 
     def _setup_adapter(self, unet) -> list:
         """LoRA (visible/d1, cette itération) ou full_finetune (réservé IR, cf. CLAUDE.md)."""
@@ -166,13 +181,15 @@ class Arc2FaceGenerator:
         ckpt_dir = self.cfg["paths"]["checkpoints"]
         tag = f"generator_{self.cfg['modality']}_{distance}"
 
+        from peft import get_peft_model_state_dict
+
         optimizer = torch.optim.AdamW(self._trainable_params, lr=train_cfg["lr"])
         step = resume_step(ckpt_dir, tag)
         ckpt_path = latest_checkpoint(ckpt_dir, tag)
         if ckpt_path is not None:
-            state = load_checkpoint(ckpt_path)
-            self._pipeline.unet.load_state_dict(state["unet"], strict=False)
-            optimizer.load_state_dict(state["optimizer"])
+            # LoRA déjà chargée par _ensure_loaded() -> _load_latest_lora() ; il ne
+            # reste que l'état de l'optimiseur (moments AdamW) à restaurer ici.
+            optimizer.load_state_dict(load_checkpoint(ckpt_path)["optimizer"])
             log.info("Reprise entraînement générateur depuis step=%d (%s)", step, ckpt_path)
 
         # Cache des embeddings ArcFace mugshot (référence identité), validé UNE FOIS
@@ -242,7 +259,11 @@ class Arc2FaceGenerator:
                 log.info("step=%d diffusion=%.4f identity=%.4f total=%.4f",
                          step, diffusion_loss.item(), id_loss.item(), loss.item())
             if step % train_cfg["ckpt_every"] == 0 or step == train_cfg["max_steps"]:
-                save_checkpoint({"unet": unet.state_dict(), "optimizer": optimizer.state_dict()},
+                # Seuls les poids LoRA (quelques Mo) sont sauvegardés, pas tout le UNet
+                # gelé (~860M paramètres, ~1.7 Go, jamais modifiés) : la base se recharge
+                # à l'identique à chaque session (Drive/Hub), inutile de la dupliquer à
+                # chaque checkpoint. Évite de saturer l'espace Drive (incident du 2026-06-25).
+                save_checkpoint({"lora": get_peft_model_state_dict(unet), "optimizer": optimizer.state_dict()},
                                  ckpt_dir, tag, step)
 
     # --------------------------------------------------------------------- sample
