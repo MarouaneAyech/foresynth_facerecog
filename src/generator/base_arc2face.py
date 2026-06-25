@@ -43,7 +43,7 @@ class Arc2FaceGenerator:
         import torch
         from diffusers import StableDiffusionPipeline, UNet2DConditionModel, DPMSolverMultistepScheduler
         from arc2face import CLIPTextModelWrapper  # paquet du repo Arc2Face, pas PyPI
-        from insightface.app import FaceAnalysis
+        from src.generator.face_detect import load_face_app
         from src.utils.arcface_backbone import load_arcface_embedder
 
         pretrained = self.cfg["generator"]["pretrained"]
@@ -81,30 +81,12 @@ class Arc2FaceGenerator:
 
         self._trainable_params = self._setup_adapter(pipeline.unet)
 
-        self._link_insightface_pack(pretrained["insightface_pack"])
-        self._face_app = FaceAnalysis(
-            name=pretrained["insightface_pack"],
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-            if self._device == "cuda" else ["CPUExecutionProvider"])
-        self._face_app.prepare(ctx_id=0 if self._device == "cuda" else -1, det_size=(640, 640))
+        self._face_app = load_face_app(self.cfg)
 
         self._identity_embedder = load_arcface_embedder(self.cfg)
         self._pipeline = pipeline
         log.info("Arc2FaceGenerator chargé (device=%s, adapter=%s, params entraînables=%d)",
                  self._device, self.adapter, sum(p.numel() for p in self._trainable_params))
-
-    def _link_insightface_pack(self, pack_name: str) -> None:
-        """Lie (symlink) un pack insightface déjà déposé (Drive) vers l'emplacement par
-        défaut attendu par FaceAnalysis (~/.insightface/models/<pack>), sans dupliquer
-        les fichiers. Sans effet si déjà présent ou si rien n'est déposé (fallback
-        normal d'insightface, qui échouera pour antelopev2 — non auto-téléchargeable)."""
-        local_pack_dir = Path(self.cfg["paths"].get("insightface_models_dir", "")) / pack_name
-        target = Path.home() / ".insightface" / "models" / pack_name
-        if target.exists() or not local_pack_dir.is_dir():
-            return
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.symlink_to(local_pack_dir, target_is_directory=True)
-        log.info("Pack insightface '%s' lié depuis %s -> %s", pack_name, local_pack_dir, target)
 
     def _setup_adapter(self, unet) -> list:
         """LoRA (visible/d1, cette itération) ou full_finetune (réservé IR, cf. CLAUDE.md)."""
@@ -134,15 +116,12 @@ class Arc2FaceGenerator:
     # ------------------------------------------------------------------- embeddings
     def _id_embedding(self, image_path: str):
         """Embedding ArcFace (antelopev2) du visage le plus grand détecté, normalisé."""
-        import numpy as np
         import torch
-        from PIL import Image
+        from src.generator.face_detect import detect_largest_face
 
-        img = np.array(Image.open(image_path).convert("RGB"))[:, :, ::-1]  # RGB->BGR (insightface)
-        faces = self._face_app.get(img)
-        if not faces:
+        face = detect_largest_face(self._face_app, image_path)
+        if face is None:
             raise ValueError(f"Aucun visage détecté par insightface : {image_path}")
-        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
         emb = torch.tensor(face.embedding, dtype=torch.float32, device=self._device)[None]
         return emb / emb.norm(dim=1, keepdim=True)
 

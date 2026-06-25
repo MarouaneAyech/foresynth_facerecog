@@ -3,7 +3,7 @@
 Usage:
   python -m experiments.run --config configs/visible_d1.yaml --stage smoke
   python -m experiments.run --config configs/visible_d1.yaml --stage partition
-  ... train_generator | generate | fidelity | train_recognition | evaluate
+  ... check_faces | train_generator | generate | fidelity | train_recognition | evaluate
 """
 from __future__ import annotations
 import argparse
@@ -13,7 +13,7 @@ from src.utils.paths import ensure_dirs
 from src.utils.seed import set_seed
 
 log = get_logger()
-STAGES = ["smoke", "partition", "train_generator", "generate",
+STAGES = ["smoke", "partition", "check_faces", "train_generator", "generate",
           "fidelity", "train_recognition", "evaluate"]
 
 
@@ -33,6 +33,15 @@ def stage_smoke(cfg: dict) -> None:
 
 def stage_partition(cfg: dict) -> None:
     from src.data import partition; partition.run(cfg)
+
+
+def stage_check_faces(cfg: dict) -> None:
+    """Diagnostic AVANT entraînement : détectabilité des mugshots (Bloc A et B),
+    rapide (insightface seul) -- évite de découvrir un échec au milieu d'un run
+    de plusieurs heures (cf. incident identité 058, cadrage trop serré)."""
+    from src.generator.face_detect import check_faces
+    for block in ("A", "B"):
+        check_faces(cfg, block)
 
 
 def stage_train_generator(cfg: dict) -> None:
@@ -88,7 +97,7 @@ def stage_evaluate(cfg: dict) -> None:
 
 
 DISPATCH = {
-    "smoke": stage_smoke, "partition": stage_partition,
+    "smoke": stage_smoke, "partition": stage_partition, "check_faces": stage_check_faces,
     "train_generator": stage_train_generator, "generate": stage_generate,
     "fidelity": stage_fidelity, "train_recognition": stage_train_recognition,
     "evaluate": stage_evaluate,
