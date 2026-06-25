@@ -15,8 +15,11 @@ distance: d1                    # d1 (4.20m) | d2 (2.60m) | d3 (1.00m)
 paths:
   drive_root: /content/drive/MyDrive/forensic_synth
   scface_root: ${paths.drive_root}/data/SCface_database
-  blocks_file: ${paths.drive_root}/data/blocks.json   # partition A/B/C figée
-  b1_testset_file: ${paths.drive_root}/data/b1_test_ids.txt  # 30 id -> Bloc C
+  # blocks.json est VERSIONNÉ DANS LE DÉPÔT (pas une donnée utilisateur) : chemin
+  # relatif au dossier de travail (= racine du repo, cf. CODE_DIR du notebook), PAS
+  # sous drive_root. Erreur déjà rencontrée : sur un nouveau compte Drive sans copie
+  # orpheline de ce fichier, le chemin ${drive_root}/data/blocks.json n'existe nulle part.
+  blocks_file: data/blocks.json   # partition A/B/C figée
   outputs: ${paths.drive_root}/outputs
   checkpoints: ${paths.drive_root}/checkpoints
   synth_dataset: ${paths.outputs}/synth/${modality}_${distance}
@@ -32,7 +35,7 @@ paths:
 partition:
   block_a_size: 50   # entraînement générateurs
   block_b_size: 50   # génération + validation fidélité
-  # Bloc C = b1_testset_file (30 id), jamais vu
+  # Bloc C = les identités restantes de blocks.json (30 id), jamais vu
 
 # --- Générateur ---
 generator:
