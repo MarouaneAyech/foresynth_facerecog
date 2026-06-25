@@ -40,7 +40,9 @@ def _add_noise(img: torch.Tensor, std: float) -> torch.Tensor:
 
 
 def _jpeg_roundtrip(img: torch.Tensor, quality: int) -> torch.Tensor:
-    pil = TF.to_pil_image(img.clamp(0, 1))
+    # TF.to_pil_image/to_tensor passent par PIL (CPU) : le tenseur revient toujours sur
+    # CPU, peu importe le device d'entrée. Rapatrié explicitement plus bas (high_order_degrade).
+    pil = TF.to_pil_image(img.detach().cpu().clamp(0, 1))
     buf = io.BytesIO()
     pil.save(buf, format="JPEG", quality=quality)
     buf.seek(0)
@@ -51,6 +53,7 @@ def high_order_degrade(img: torch.Tensor, distance: str, rng_seed: int | None = 
     """img: (3,H,W) en [0,1]. distance: 'd1'|'d2'|'d3'. Retourne une version dégradée."""
     if distance not in _SEVERITY:
         raise NotImplementedError(f"TODO(claude): sévérité de dégradation non définie pour distance={distance}")
+    device = img.device
     rng = random.Random(rng_seed)
     sev = _SEVERITY[distance]
     out = img
@@ -59,4 +62,4 @@ def high_order_degrade(img: torch.Tensor, distance: str, rng_seed: int | None = 
         out = _resize_down_up(out, rng.uniform(*sev["resize_scale"]))
         out = _add_noise(out, rng.uniform(*sev["noise_std"]))
         out = _jpeg_roundtrip(out, rng.randint(*sev["jpeg_quality"]))
-    return out
+    return out.to(device)  # _jpeg_roundtrip repasse toujours par CPU (PIL)
