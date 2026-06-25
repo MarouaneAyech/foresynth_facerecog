@@ -65,6 +65,9 @@ class Arc2FaceGenerator:
             torch_dtype=dtype, safety_checker=None)
         pipeline.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
         pipeline = pipeline.to(self._device)
+        # Le scheduler n'est pas un nn.Module : pipeline.to(device) ne déplace pas
+        # alphas_cumprod, indexé directement par fit() avec un tenseur GPU (timesteps).
+        pipeline.scheduler.alphas_cumprod = pipeline.scheduler.alphas_cumprod.to(self._device)
         pipeline.vae.requires_grad_(False)
         pipeline.text_encoder.requires_grad_(False)
 
