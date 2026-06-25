@@ -127,8 +127,18 @@ class Arc2FaceGenerator:
         return emb / emb.norm(dim=1, keepdim=True)
 
     def _project_for_conditioning(self, id_emb):
+        import torch
         from arc2face import project_face_embs
-        return project_face_embs(self._pipeline, id_emb.to(self._pipeline.unet.dtype))
+        # Contournement d'un bug d'Arc2Face (arc2face/utils.py) : project_face_embs
+        # indexe token_embs (taille N) avec le masque `input_ids==arcface_token_id`
+        # (toujours taille 1, jamais répété), ce qui plante dès que N>1 (plusieurs
+        # identités différentes dans un même batch, notre cas en entraînement).
+        # Leur propre usage (génération) n'appelle jamais la fonction avec N>1, donc
+        # le bug n'apparaît jamais chez eux. Contournement : appeler par identité (N=1).
+        dtype = self._pipeline.unet.dtype
+        embs = [project_face_embs(self._pipeline, id_emb[i:i + 1].to(dtype))
+                for i in range(id_emb.shape[0])]
+        return torch.cat(embs, dim=0)
 
     def _load_image_tensor(self, path: str, size: int):
         import torch
