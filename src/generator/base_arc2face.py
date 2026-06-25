@@ -196,8 +196,26 @@ class Arc2FaceGenerator:
             optimizer.load_state_dict(state["optimizer"])
             log.info("Reprise entraînement générateur depuis step=%d (%s)", step, ckpt_path)
 
-        # cache des embeddings ArcFace mugshot (référence identité), 1 appel/identité.
+        # Cache des embeddings ArcFace mugshot (référence identité), validé UNE FOIS
+        # pour toutes les identités avant la boucle : si la détection de visage échoue
+        # pour une identité (image atypique), elle est exclue proprement (log clair)
+        # plutôt que de planter tout l'entraînement au pas où elle est tirée (souvent
+        # après une longue progression déjà accomplie).
         ref_embeddings: dict[str, torch.Tensor] = {}
+        skipped_identities: set[str] = set()
+        mugshot_by_identity = {p.identity: p.mugshot_path for p in pairs}
+        for identity, mugshot_path in mugshot_by_identity.items():
+            try:
+                ref_embeddings[identity] = self._id_embedding(mugshot_path)
+            except ValueError as e:
+                log.warning("Identité %s exclue du Bloc A (visage non détecté) : %s", identity, e)
+                skipped_identities.add(identity)
+        if skipped_identities:
+            pairs = [p for p in pairs if p.identity not in skipped_identities]
+        if not pairs:
+            raise RuntimeError("Aucune paire valide après exclusion des échecs de détection de visage.")
+        log.info("Bloc A : %d paires valides, %d identité(s) exclue(s) : %s",
+                  len(pairs), len(skipped_identities), sorted(skipped_identities) or "aucune")
 
         unet, vae, scheduler = self._pipeline.unet, self._pipeline.vae, self._pipeline.scheduler
         vae_scale = vae.config.scaling_factor
@@ -210,8 +228,6 @@ class Arc2FaceGenerator:
 
             id_embs, target_imgs = [], []
             for p in batch:
-                if p.identity not in ref_embeddings:
-                    ref_embeddings[p.identity] = self._id_embedding(p.mugshot_path)
                 id_embs.append(ref_embeddings[p.identity])
                 target = self._load_image_tensor(p.target_path, size=512)
                 if degrade_prior:
