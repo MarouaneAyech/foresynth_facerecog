@@ -263,7 +263,12 @@ class Arc2FaceGenerator:
             x0_pred = (noisy_latents - alphas_cumprod[timesteps].sqrt().view(-1, 1, 1, 1) * noise_pred
                        ) / (1 - alphas_cumprod[timesteps]).sqrt().view(-1, 1, 1, 1)
             decoded = (vae.decode((x0_pred / vae_scale).to(vae.dtype)).sample / 2 + 0.5).clamp(0, 1).float()
-            id_loss = identity_cosine_loss(decoded, id_emb.float(), self._identity_embedder)
+            # Pondère par alphas_cumprod[timesteps] (proche de 1 = faible bruit, x0_pred
+            # fiable ; proche de 0 = fort bruit, x0_pred quasi inexploitable). Sans ça,
+            # identity_loss restait plate ~1.0 tout l'entraînement (gradient utile noyé
+            # par les tirages à fort bruit, majoritaires sur l'échantillonnage uniforme).
+            id_loss = identity_cosine_loss(decoded, id_emb.float(), self._identity_embedder,
+                                            weights=alphas_cumprod[timesteps])
 
             loss = diffusion_loss + id_weight * id_loss
             optimizer.zero_grad()
