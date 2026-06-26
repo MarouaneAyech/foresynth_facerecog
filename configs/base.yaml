@@ -61,8 +61,10 @@ generator:
   train:
     lr: 1.0e-4
     max_steps: 4000
-    batch_size: 2             # OOM observé à 4 sur T4 15 Go (VAE decode + ArcFace avec
-                               # gradients, en plus du UNet, pour la perte d'identité)
+    batch_size: 1             # OOM observé à 4 puis à nouveau à 2 (VAE passé en
+                               # float32 -> ~2x plus gourmand) sur T4 15 Go ; VAE
+                               # decode + ArcFace avec gradients, en plus du UNet,
+                               # pour la perte d'identité
     ckpt_every: 200           # reprenable
     log_every: 50
 

@@ -80,9 +80,12 @@ class Arc2FaceGenerator:
         pipeline.vae.to(dtype=torch.float32)
         # Économie mémoire (entraînement = UNet forward+backward ET VAE decode+ArcFace
         # avec gradients actifs pour la perte d'identité, simultanément en mémoire
-        # jusqu'à loss.backward() -> OOM observé même sur un T4 15 Go à batch_size=4).
+        # jusqu'à loss.backward() -> OOM observé même sur un T4 15 Go à batch_size=4,
+        # puis ré-observé à batch_size=2 après passage du VAE en float32 (~2x plus
+        # gourmand que float16) -> tiling en plus du slicing, batch_size réduit à 1.
         pipeline.unet.enable_gradient_checkpointing()
         pipeline.vae.enable_slicing()
+        pipeline.vae.enable_tiling()
 
         self._trainable_params = self._setup_adapter(pipeline.unet)
         self._load_latest_lora(pipeline.unet)
