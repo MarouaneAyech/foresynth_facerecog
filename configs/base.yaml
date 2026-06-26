@@ -54,7 +54,10 @@ generator:
   samples_per_identity: 20    # K : diversité intra-classe
   sample:                     # génération (stage 'generate', Arc2FaceGenerator.sample)
     num_inference_steps: 25
-    guidance_scale: 3.0       # artefacts néon/postérisés observés -> tester plus bas (1.0-1.5)
+    # 3.0 = valeur recommandée par Arc2Face. Les artefacts néon/postérisés observés
+    # le 2026-06-26 étaient IDENTIQUES à 1.0 et 3.0 -> CFG écarté comme cause (la
+    # vraie cause était le VAE SD1.5 instable en float16, corrigé dans _ensure_loaded).
+    guidance_scale: 3.0
   train:
     lr: 1.0e-4
     max_steps: 4000
