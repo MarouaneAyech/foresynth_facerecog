@@ -299,10 +299,17 @@ class Arc2FaceGenerator:
         """Guidage actif à la génération (inspiré d'ID³, cf. discussion) : à chaque pas
         de débruitage, pousse le latent vers l'identité cible via le gradient d'ArcFace,
         plutôt que de compter uniquement sur ce que la LoRA a appris à l'entraînement.
-        N'a besoin d'AUCUN ré-entraînement : agit uniquement à l'inférence."""
+        N'a besoin d'AUCUN ré-entraînement : agit uniquement à l'inférence.
+
+        Pondéré par alphas_cumprod[timestep] (même principe que côté entraînement,
+        identity_loss) : à fort bruit (début du débruitage), x0_pred est trop grossier
+        pour qu'ArcFace donne un gradient utile -> sans pondération, force=500 détruisait
+        complètement l'image (poussait fort sur un gradient inexploitable). Quasi nul en
+        début de trajectoire, plein effet en fin (faible bruit, x0_pred fiable)."""
         import torch
         vae = self._pipeline.vae
         arcface = self._identity_embedder
+        alphas_cumprod = self._pipeline.scheduler.alphas_cumprod  # reste CPU/float32, jamais muté
 
         def callback(pipe, step_index, timestep, callback_kwargs):
             latents = callback_kwargs["latents"]
@@ -313,7 +320,9 @@ class Arc2FaceGenerator:
                 cos = (arcface(decoded) * target_id_emb.float()).sum(dim=-1)
                 loss = (1.0 - cos).sum()
                 grad = torch.autograd.grad(loss, latents_req)[0]
-            callback_kwargs["latents"] = latents - strength * grad.to(latents.dtype)
+            t_idx = torch.as_tensor(timestep).detach().cpu().long().clamp(0, alphas_cumprod.shape[0] - 1)
+            weight = alphas_cumprod[t_idx].to(device=latents.device, dtype=latents.dtype)
+            callback_kwargs["latents"] = latents - (strength * weight) * grad.to(latents.dtype)
             return callback_kwargs
 
         return callback
