@@ -51,15 +51,26 @@ def stage_train_generator(cfg: dict) -> None:
 
 
 def stage_generate(cfg: dict) -> None:
+    from pathlib import Path
     from src.generator.api import build_generator
     from src.data.pairs import list_pairs
-    gen = build_generator(cfg)
+    gen = None
     k = cfg["generator"]["samples_per_identity"]
+    synth_root = Path(cfg["paths"]["synth_dataset"])
     # list_pairs renvoie 7 paires par identité (une par caméra), même mugshot_path à
     # chaque fois : dédupliquer, sinon sample() est appelé 7x par identité pour rien
     # (écrase chaque fois les mêmes fichiers de sortie -> 7x plus lent que nécessaire).
     mugshot_by_identity = {p.identity: p.mugshot_path for p in list_pairs(cfg, block="B")}
     for identity, mugshot_path in mugshot_by_identity.items():
+        # Reprenable : une coupure Colab en cours de route (ex. génération interrompue
+        # à 15/20 images pour une identité) n'oblige pas à tout refaire -- relancer le
+        # même stage saute les identités déjà complètes et termine/refait les autres.
+        existing = len(list((synth_root / identity).glob("*.png"))) if (synth_root / identity).is_dir() else 0
+        if existing >= k:
+            log.info("Identité %s : déjà %d/%d images, ignorée", identity, existing, k)
+            continue
+        if gen is None:
+            gen = build_generator(cfg)
         gen.sample(mugshot_path, k=k)
         log.info("Identité %s : %d échantillons générés", identity, k)
 
