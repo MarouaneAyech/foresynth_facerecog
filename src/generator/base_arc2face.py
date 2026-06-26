@@ -191,14 +191,25 @@ class Arc2FaceGenerator:
         tag = f"generator_{self.cfg['modality']}_{distance}"
 
         from peft import get_peft_model_state_dict
+        from diffusers.optimization import get_scheduler
 
         optimizer = torch.optim.AdamW(self._trainable_params, lr=train_cfg["lr"])
+        # LR decroissant (cosine, apres warmup) plutot que constant sur toute la duree :
+        # hygiene d'entrainement standard absente jusqu'ici (cf. comparaison litterature
+        # Arc2Avatar, 2026-06-27), un LR constant sur des milliers de pas sur un petit
+        # jeu de donnees repete favorise l'instabilite/le surapprentissage tardif.
+        lr_scheduler = get_scheduler(
+            train_cfg["lr_scheduler"], optimizer=optimizer,
+            num_warmup_steps=train_cfg["lr_warmup_steps"], num_training_steps=train_cfg["max_steps"])
         step = resume_step(ckpt_dir, tag)
         ckpt_path = latest_checkpoint(ckpt_dir, tag)
         if ckpt_path is not None:
             # LoRA déjà chargée par _ensure_loaded() -> _load_latest_lora() ; il ne
-            # reste que l'état de l'optimiseur (moments AdamW) à restaurer ici.
-            optimizer.load_state_dict(load_checkpoint(ckpt_path)["optimizer"])
+            # reste que l'état de l'optimiseur (moments AdamW) et du scheduler LR à
+            # restaurer ici.
+            ckpt_state = load_checkpoint(ckpt_path)
+            optimizer.load_state_dict(ckpt_state["optimizer"])
+            lr_scheduler.load_state_dict(ckpt_state["lr_scheduler"])
             log.info("Reprise entraînement générateur depuis step=%d (%s)", step, ckpt_path)
 
         # Cache des embeddings ArcFace mugshot (référence identité), validé UNE FOIS
@@ -230,12 +241,21 @@ class Arc2FaceGenerator:
         # (float16) promeut implicitement vers float32 et casse vae.decode.
         alphas_cumprod = scheduler.alphas_cumprod.to(self._device, dtype=unet.dtype)
 
-        i = 0
+        import random
         n = len(pairs)
+        order = list(range(n))
+        random.shuffle(order)  # hygiene manquante jusqu'ici : ordre cyclique fixe pairs[(i+j)%n]
+        oi = 0
         grad_norm_max = 0.0  # diagnostic : pic de norme de gradient sur tout le run (cf. instabilite suspectee)
         while step < train_cfg["max_steps"]:
-            batch = [pairs[(i + j) % n] for j in range(train_cfg["batch_size"])]
-            i = (i + train_cfg["batch_size"]) % n
+            batch_idx = []
+            for _ in range(train_cfg["batch_size"]):
+                if oi >= n:
+                    random.shuffle(order)  # nouvelle "epoch" : ré-mélange
+                    oi = 0
+                batch_idx.append(order[oi])
+                oi += 1
+            batch = [pairs[idx] for idx in batch_idx]
 
             id_embs, target_imgs = [], []
             for p in batch:
@@ -274,25 +294,26 @@ class Arc2FaceGenerator:
             loss = diffusion_loss + id_weight * id_loss
             optimizer.zero_grad()
             loss.backward()
-            # DIAGNOSTIC (pas encore un correctif) : norme totale du gradient, sans
-            # écrêtage réel (max_norm=inf -> ne modifie jamais les gradients). Sert à
-            # confirmer ou écarter l'hypothèse d'instabilité (pics de gradient) avant
-            # d'ajouter un vrai clipping. Cf. incident fidelity FAIL à tous les
-            # checkpoints testés (2026-06-26).
-            grad_norm = torch.nn.utils.clip_grad_norm_(self._trainable_params, max_norm=float("inf")).item()
+            # Écrêtage RÉEL (diagnostic du 2026-06-26 n'avait observé aucun pic, mais
+            # l'absence de tout filet de sécurité reste une déviation des bonnes
+            # pratiques standard -> garde-fou, sans qu'on attende qu'il déclenche souvent).
+            grad_norm = torch.nn.utils.clip_grad_norm_(self._trainable_params, train_cfg["max_grad_norm"]).item()
             grad_norm_max = max(grad_norm_max, grad_norm)
             optimizer.step()
+            lr_scheduler.step()
             step += 1
 
             if step % train_cfg["log_every"] == 0 or step == train_cfg["max_steps"]:
-                log.info("step=%d diffusion=%.4f identity=%.4f total=%.4f grad_norm=%.4f grad_norm_max=%.4f",
-                         step, diffusion_loss.item(), id_loss.item(), loss.item(), grad_norm, grad_norm_max)
+                log.info("step=%d diffusion=%.4f identity=%.4f total=%.4f grad_norm=%.4f grad_norm_max=%.4f lr=%.2e",
+                         step, diffusion_loss.item(), id_loss.item(), loss.item(), grad_norm, grad_norm_max,
+                         lr_scheduler.get_last_lr()[0])
             if step % train_cfg["ckpt_every"] == 0 or step == train_cfg["max_steps"]:
                 # Seuls les poids LoRA (quelques Mo) sont sauvegardés, pas tout le UNet
                 # gelé (~860M paramètres, ~1.7 Go, jamais modifiés) : la base se recharge
                 # à l'identique à chaque session (Drive/Hub), inutile de la dupliquer à
                 # chaque checkpoint. Évite de saturer l'espace Drive (incident du 2026-06-25).
-                save_checkpoint({"lora": get_peft_model_state_dict(unet), "optimizer": optimizer.state_dict()},
+                save_checkpoint({"lora": get_peft_model_state_dict(unet), "optimizer": optimizer.state_dict(),
+                                  "lr_scheduler": lr_scheduler.state_dict()},
                                  ckpt_dir, tag, step)
 
     def _identity_guidance_callback(self, target_id_emb: "torch.Tensor", strength: float):

@@ -64,6 +64,12 @@ generator:
     identity_guidance_strength: 0.0
   train:
     lr: 1.0e-4
+    lr_scheduler: cosine      # constant -> cosine : decroit vers 0 plutot que rester
+                              # plat sur toute la duree (hygiene manquante identifiee
+                              # le 2026-06-27, cf. comparaison Arc2Avatar/litterature)
+    lr_warmup_steps: 100
+    max_grad_norm: 1.0        # ecretage REEL (diagnostic precedent : pas d'instabilite
+                              # observee, mais absence de filet de securite standard)
     max_steps: 4000
     batch_size: 1             # OOM observé à 4 puis à nouveau à 2 (VAE passé en
                                # float32 -> ~2x plus gourmand) sur T4 15 Go ; VAE
