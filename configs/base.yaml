@@ -52,6 +52,9 @@ generator:
   identity_loss_weight: 0.5   # poids cosinus ArcFace
   degrade_prior: true         # amorce Real-ESRGAN (aide la LoRA à atteindre la dégradation)
   samples_per_identity: 20    # K : diversité intra-classe
+  sample:                     # génération (stage 'generate', Arc2FaceGenerator.sample)
+    num_inference_steps: 25
+    guidance_scale: 3.0       # artefacts néon/postérisés observés -> tester plus bas (1.0-1.5)
   train:
     lr: 1.0e-4
     max_steps: 4000

@@ -284,13 +284,15 @@ class Arc2FaceGenerator:
         out_dir = Path(self.cfg["paths"]["synth_dataset"]) / identity
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        sample_cfg = self.cfg["generator"]["sample"]
         paths = []
         with torch.no_grad():
             for idx in range(k):
                 generator = torch.Generator(device=self._device).manual_seed(idx)
                 image = self._pipeline(
                     prompt_embeds=prompt_embeds[idx:idx + 1],
-                    num_inference_steps=25, guidance_scale=3.0,
+                    num_inference_steps=sample_cfg["num_inference_steps"],
+                    guidance_scale=sample_cfg["guidance_scale"],
                     generator=generator).images[0]
                 path = out_dir / f"{identity}_{idx:03d}.png"
                 image.save(path)
