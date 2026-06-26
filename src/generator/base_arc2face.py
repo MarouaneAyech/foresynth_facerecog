@@ -15,6 +15,7 @@ Dépendances externes attendues (cf. requirements.txt) :
   https://github.com/foivospar/Arc2Face (pas sur PyPI), cf. requirements.txt.
 """
 from __future__ import annotations
+import contextlib
 from pathlib import Path
 from typing import Sequence
 
@@ -294,6 +295,29 @@ class Arc2FaceGenerator:
                 save_checkpoint({"lora": get_peft_model_state_dict(unet), "optimizer": optimizer.state_dict()},
                                  ckpt_dir, tag, step)
 
+    def _identity_guidance_callback(self, target_id_emb: "torch.Tensor", strength: float):
+        """Guidage actif à la génération (inspiré d'ID³, cf. discussion) : à chaque pas
+        de débruitage, pousse le latent vers l'identité cible via le gradient d'ArcFace,
+        plutôt que de compter uniquement sur ce que la LoRA a appris à l'entraînement.
+        N'a besoin d'AUCUN ré-entraînement : agit uniquement à l'inférence."""
+        import torch
+        vae = self._pipeline.vae
+        arcface = self._identity_embedder
+
+        def callback(pipe, step_index, timestep, callback_kwargs):
+            latents = callback_kwargs["latents"]
+            with torch.enable_grad():
+                latents_req = latents.detach().clone().requires_grad_(True)
+                decoded = vae.decode((latents_req / vae.config.scaling_factor).to(vae.dtype)).sample
+                decoded = (decoded / 2 + 0.5).clamp(0, 1).float()
+                cos = (arcface(decoded) * target_id_emb.float()).sum(dim=-1)
+                loss = (1.0 - cos).sum()
+                grad = torch.autograd.grad(loss, latents_req)[0]
+            callback_kwargs["latents"] = latents - strength * grad.to(latents.dtype)
+            return callback_kwargs
+
+        return callback
+
     # --------------------------------------------------------------------- sample
     def sample(self, mugshot_path: str, k: int) -> list[str]:
         """Génère k échantillons (diversité intra-classe) ; sauve sous paths.synth_dataset."""
@@ -309,22 +333,31 @@ class Arc2FaceGenerator:
         out_dir.mkdir(parents=True, exist_ok=True)
 
         sample_cfg = self.cfg["generator"]["sample"]
+        guidance_strength = sample_cfg.get("identity_guidance_strength", 0.0)
         paths = []
-        with torch.no_grad():
-            for idx in range(k):
-                generator = torch.Generator(device=self._device).manual_seed(idx)
-                # output_type="latent" : on décode nous-mêmes (cf. _ensure_loaded, VAE en
-                # float32 pour éviter les artefacts néon/NaN connus du VAE SD1.5 en
-                # float16 ; l'appel intégré du pipeline ne cast pas vers le dtype du VAE).
+        for idx in range(k):
+            generator = torch.Generator(device=self._device).manual_seed(idx)
+            callback_kwargs = {}
+            if guidance_strength > 0:
+                callback_kwargs = dict(
+                    callback_on_step_end=self._identity_guidance_callback(id_emb, guidance_strength),
+                    callback_on_step_end_tensor_inputs=["latents"])
+            # output_type="latent" : on décode nous-mêmes (cf. _ensure_loaded, VAE en
+            # float32 pour éviter les artefacts néon/NaN connus du VAE SD1.5 en
+            # float16 ; l'appel intégré du pipeline ne cast pas vers le dtype du VAE).
+            # Pas de torch.no_grad() global ici : le callback de guidage a besoin du
+            # gradient (réactivé localement via torch.enable_grad() dans le callback).
+            with torch.no_grad() if guidance_strength == 0 else contextlib.nullcontext():
                 latents = self._pipeline(
                     prompt_embeds=prompt_embeds[idx:idx + 1],
                     num_inference_steps=sample_cfg["num_inference_steps"],
                     guidance_scale=sample_cfg["guidance_scale"],
-                    generator=generator, output_type="latent").images
+                    generator=generator, output_type="latent", **callback_kwargs).images
                 vae = self._pipeline.vae
-                decoded = vae.decode((latents / vae.config.scaling_factor).to(vae.dtype)).sample
-                image = self._pipeline.image_processor.postprocess(decoded, output_type="pil")[0]
-                path = out_dir / f"{identity}_{idx:03d}.png"
-                image.save(path)
-                paths.append(str(path))
+                with torch.no_grad():
+                    decoded = vae.decode((latents / vae.config.scaling_factor).to(vae.dtype)).sample
+            image = self._pipeline.image_processor.postprocess(decoded, output_type="pil")[0]
+            path = out_dir / f"{identity}_{idx:03d}.png"
+            image.save(path)
+            paths.append(str(path))
         return paths

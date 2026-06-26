@@ -58,6 +58,10 @@ generator:
     # le 2026-06-26 étaient IDENTIQUES à 1.0 et 3.0 -> CFG écarté comme cause (la
     # vraie cause était le VAE SD1.5 instable en float16, corrigé dans _ensure_loaded).
     guidance_scale: 3.0
+    # Guidage actif par gradient ArcFace à CHAQUE pas de débruitage (inspiré d'ID³,
+    # cf. discussion 2026-06-26) : 0.0 = désactivé (comportement standard). Agit
+    # uniquement à l'inférence, aucun ré-entraînement requis pour tester une valeur.
+    identity_guidance_strength: 0.0
   train:
     lr: 1.0e-4
     max_steps: 4000
