@@ -72,6 +72,12 @@ class Arc2FaceGenerator:
         # sample(). fit() fait sa propre copie locale castée (cf. plus bas).
         pipeline.vae.requires_grad_(False)
         pipeline.text_encoder.requires_grad_(False)
+        # Le VAE original de Stable Diffusion 1.5 est numériquement instable en
+        # float16 (NaN/overflow connus dans son bloc d'attention) -> artefacts
+        # néon/postérisés observés en génération, indépendants de guidance_scale
+        # (confirmé : identiques à 1.0 et 3.0). Reste seul en float32 ; UNet/texte
+        # restent float16. fit()/sample() castent explicitement aux frontières.
+        pipeline.vae.to(dtype=torch.float32)
         # Économie mémoire (entraînement = UNet forward+backward ET VAE decode+ArcFace
         # avec gradients actifs pour la perte d'identité, simultanément en mémoire
         # jusqu'à loss.backward() -> OOM observé même sur un T4 15 Go à batch_size=4).
@@ -236,10 +242,12 @@ class Arc2FaceGenerator:
 
             id_emb = torch.cat(id_embs, dim=0)
             prompt_embeds = self._project_for_conditioning(id_emb)
-            target_batch = torch.stack(target_imgs).to(unet.dtype)
+            # VAE en float32 (cf. _ensure_loaded) : encoder en son dtype natif, puis
+            # rebasculer en float16 pour le UNet (qui lui reste en float16).
+            target_batch = torch.stack(target_imgs).to(vae.dtype)
 
             with torch.no_grad():
-                latents = vae.encode(target_batch * 2 - 1).latent_dist.sample() * vae_scale
+                latents = (vae.encode(target_batch * 2 - 1).latent_dist.sample() * vae_scale).to(unet.dtype)
             noise = torch.randn_like(latents)
             timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (latents.shape[0],),
                                        device=self._device).long()
@@ -250,7 +258,7 @@ class Arc2FaceGenerator:
 
             x0_pred = (noisy_latents - alphas_cumprod[timesteps].sqrt().view(-1, 1, 1, 1) * noise_pred
                        ) / (1 - alphas_cumprod[timesteps]).sqrt().view(-1, 1, 1, 1)
-            decoded = (vae.decode(x0_pred / vae_scale).sample / 2 + 0.5).clamp(0, 1).float()
+            decoded = (vae.decode((x0_pred / vae_scale).to(vae.dtype)).sample / 2 + 0.5).clamp(0, 1).float()
             id_loss = identity_cosine_loss(decoded, id_emb.float(), self._identity_embedder)
 
             loss = diffusion_loss + id_weight * id_loss
@@ -289,11 +297,17 @@ class Arc2FaceGenerator:
         with torch.no_grad():
             for idx in range(k):
                 generator = torch.Generator(device=self._device).manual_seed(idx)
-                image = self._pipeline(
+                # output_type="latent" : on décode nous-mêmes (cf. _ensure_loaded, VAE en
+                # float32 pour éviter les artefacts néon/NaN connus du VAE SD1.5 en
+                # float16 ; l'appel intégré du pipeline ne cast pas vers le dtype du VAE).
+                latents = self._pipeline(
                     prompt_embeds=prompt_embeds[idx:idx + 1],
                     num_inference_steps=sample_cfg["num_inference_steps"],
                     guidance_scale=sample_cfg["guidance_scale"],
-                    generator=generator).images[0]
+                    generator=generator, output_type="latent").images
+                vae = self._pipeline.vae
+                decoded = vae.decode((latents / vae.config.scaling_factor).to(vae.dtype)).sample
+                image = self._pipeline.image_processor.postprocess(decoded, output_type="pil")[0]
                 path = out_dir / f"{identity}_{idx:03d}.png"
                 image.save(path)
                 paths.append(str(path))
