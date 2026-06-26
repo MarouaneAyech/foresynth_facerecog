@@ -55,8 +55,13 @@ def stage_generate(cfg: dict) -> None:
     from src.data.pairs import list_pairs
     gen = build_generator(cfg)
     k = cfg["generator"]["samples_per_identity"]
-    for p in list_pairs(cfg, block="B"):
-        gen.sample(p.mugshot_path, k=k)
+    # list_pairs renvoie 7 paires par identité (une par caméra), même mugshot_path à
+    # chaque fois : dédupliquer, sinon sample() est appelé 7x par identité pour rien
+    # (écrase chaque fois les mêmes fichiers de sortie -> 7x plus lent que nécessaire).
+    mugshot_by_identity = {p.identity: p.mugshot_path for p in list_pairs(cfg, block="B")}
+    for identity, mugshot_path in mugshot_by_identity.items():
+        gen.sample(mugshot_path, k=k)
+        log.info("Identité %s : %d échantillons générés", identity, k)
 
 
 def stage_fidelity(cfg: dict) -> None:
