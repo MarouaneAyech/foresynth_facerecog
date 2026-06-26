@@ -65,12 +65,11 @@ class Arc2FaceGenerator:
             torch_dtype=dtype, safety_checker=None)
         pipeline.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
         pipeline = pipeline.to(self._device)
-        # Le scheduler n'est pas un nn.Module : pipeline.to(device) ne déplace pas
-        # alphas_cumprod, indexé directement par fit() avec un tenseur GPU (timesteps).
-        # Cast aussi le dtype (natif float32) : multiplié par noise_pred (float16 sur
-        # GPU), la promotion implicite vers float32 ferait planter vae.decode (attend du
-        # float16) avec un mismatch de type, même classe de bug que le device juste au-dessus.
-        pipeline.scheduler.alphas_cumprod = pipeline.scheduler.alphas_cumprod.to(self._device, dtype=dtype)
+        # NE PAS muter pipeline.scheduler.alphas_cumprod ici : c'est un objet PARTAGÉ
+        # entre fit() (calcul bas niveau, a besoin d'un tenseur GPU/dtype cohérent) et
+        # l'appel haut niveau self._pipeline(...) dans sample() (scheduler.set_timesteps
+        # convertit alphas_cumprod en numpy -> exige du CPU). Le déplacer ici cassait
+        # sample(). fit() fait sa propre copie locale castée (cf. plus bas).
         pipeline.vae.requires_grad_(False)
         pipeline.text_encoder.requires_grad_(False)
         # Économie mémoire (entraînement = UNet forward+backward ET VAE decode+ArcFace
@@ -215,6 +214,11 @@ class Arc2FaceGenerator:
 
         unet, vae, scheduler = self._pipeline.unet, self._pipeline.vae, self._pipeline.scheduler
         vae_scale = vae.config.scaling_factor
+        # Copie locale (device+dtype) d'alphas_cumprod : scheduler.alphas_cumprod lui-même
+        # reste sur CPU/float32 (attendu par sample(), cf. _ensure_loaded). Sans ce cast,
+        # l'indexer avec un tenseur GPU (timesteps) plante, et le multiplier par noise_pred
+        # (float16) promeut implicitement vers float32 et casse vae.decode.
+        alphas_cumprod = scheduler.alphas_cumprod.to(self._device, dtype=unet.dtype)
 
         i = 0
         n = len(pairs)
@@ -244,8 +248,8 @@ class Arc2FaceGenerator:
             noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states=prompt_embeds).sample
             diffusion_loss = F.mse_loss(noise_pred.float(), noise.float())
 
-            x0_pred = (noisy_latents - scheduler.alphas_cumprod[timesteps].sqrt().view(-1, 1, 1, 1) * noise_pred
-                       ) / (1 - scheduler.alphas_cumprod[timesteps]).sqrt().view(-1, 1, 1, 1)
+            x0_pred = (noisy_latents - alphas_cumprod[timesteps].sqrt().view(-1, 1, 1, 1) * noise_pred
+                       ) / (1 - alphas_cumprod[timesteps]).sqrt().view(-1, 1, 1, 1)
             decoded = (vae.decode(x0_pred / vae_scale).sample / 2 + 0.5).clamp(0, 1).float()
             id_loss = identity_cosine_loss(decoded, id_emb.float(), self._identity_embedder)
 
