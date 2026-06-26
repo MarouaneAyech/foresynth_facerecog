@@ -228,6 +228,7 @@ class Arc2FaceGenerator:
 
         i = 0
         n = len(pairs)
+        grad_norm_max = 0.0  # diagnostic : pic de norme de gradient sur tout le run (cf. instabilite suspectee)
         while step < train_cfg["max_steps"]:
             batch = [pairs[(i + j) % n] for j in range(train_cfg["batch_size"])]
             i = (i + train_cfg["batch_size"]) % n
@@ -264,12 +265,19 @@ class Arc2FaceGenerator:
             loss = diffusion_loss + id_weight * id_loss
             optimizer.zero_grad()
             loss.backward()
+            # DIAGNOSTIC (pas encore un correctif) : norme totale du gradient, sans
+            # écrêtage réel (max_norm=inf -> ne modifie jamais les gradients). Sert à
+            # confirmer ou écarter l'hypothèse d'instabilité (pics de gradient) avant
+            # d'ajouter un vrai clipping. Cf. incident fidelity FAIL à tous les
+            # checkpoints testés (2026-06-26).
+            grad_norm = torch.nn.utils.clip_grad_norm_(self._trainable_params, max_norm=float("inf")).item()
+            grad_norm_max = max(grad_norm_max, grad_norm)
             optimizer.step()
             step += 1
 
             if step % train_cfg["log_every"] == 0 or step == train_cfg["max_steps"]:
-                log.info("step=%d diffusion=%.4f identity=%.4f total=%.4f",
-                         step, diffusion_loss.item(), id_loss.item(), loss.item())
+                log.info("step=%d diffusion=%.4f identity=%.4f total=%.4f grad_norm=%.4f grad_norm_max=%.4f",
+                         step, diffusion_loss.item(), id_loss.item(), loss.item(), grad_norm, grad_norm_max)
             if step % train_cfg["ckpt_every"] == 0 or step == train_cfg["max_steps"]:
                 # Seuls les poids LoRA (quelques Mo) sont sauvegardés, pas tout le UNet
                 # gelé (~860M paramètres, ~1.7 Go, jamais modifiés) : la base se recharge
