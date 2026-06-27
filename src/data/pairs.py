@@ -15,7 +15,14 @@ from pathlib import Path
 
 from src.data.partition import run as load_partition_validated
 
-N_CAMS_VISIBLE = 7  # caméras 1 à 7, identiques pour d1/d2/d3 (cf. SCface)
+# SCface (Grgic et al.) : 5 caméras VISIBLES (1-5) + 2 caméras à capacité infrarouge/
+# vision nocturne (6-7) -- confirmé visuellement le 2026-06-27 (cam_6/cam_7 sont en
+# niveaux de gris, éclairage IR caractéristique, alors que cam_1..5 sont en couleur).
+# cam_{6,7} sous "surveillance_cameras_distance_N" sont les captures IR à distance
+# (distinctes de surveillance_cameras_IR_cam8, qui sont des MUGSHOTS IR, pas des
+# captures à distance). Les inclure comme cibles "visible" mélangeait silencieusement
+# ~28,6% d'images infrarouges dans tout le pipeline (génération, fidelity, reconnaissance).
+N_CAMS_VISIBLE = 5  # caméras 1 à 5 SEULEMENT pour la modalité 'visible'
 
 
 @dataclass
