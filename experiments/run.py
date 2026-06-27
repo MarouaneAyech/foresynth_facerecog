@@ -121,6 +121,8 @@ DISPATCH = {
 
 
 def main() -> None:
+    from src.utils.logging import attach_file_handler
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--stage", required=True, choices=STAGES)
@@ -128,6 +130,10 @@ def main() -> None:
     cfg = load_config(args.config)
     set_seed(cfg.get("seed", 42))
     ensure_dirs(cfg)
+    # Copie persistante sur Drive (cf. CLAUDE.md), en plus de la console -- la sortie
+    # de cellule Colab seule se perd si la session coupe sans sauvegarde du notebook.
+    attach_file_handler(log, cfg["paths"]["checkpoints"],
+                         f"log_{args.stage}_{cfg['modality']}_{cfg['distance']}.txt")
     log.info("STAGE=%s CONFIG=%s (%s/%s)", args.stage, args.config, cfg["modality"], cfg["distance"])
     DISPATCH[args.stage](cfg)
 
