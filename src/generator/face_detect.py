@@ -50,6 +50,33 @@ def detect_largest_face(face_app, image_path: str):
     return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
 
 
+def load_aligned_face_tensor(image_path: str, face_app, size: int = 112):
+    """Charge une image -> tenseur (3,size,size) en [0,1], ALIGNÉ par similarité sur
+    les 5 points de repère (yeux/nez/bouche), convention ArcFace standard.
+
+    Remplace un simple resize (cf. incident : perte d'identité jamais corrigée,
+    baseline sans fine-tuning anormalement basse — un ArcFace gelé est très sensible
+    au désalignement). Utilise insightface.utils.face_align.norm_crop, la fonction
+    d'alignement canonique de l'écosystème InsightFace (même principe que le cache
+    pré-aligné du code de référence B1, construit via antelopev2).
+
+    Lève ValueError si aucun visage n'est détecté (à gérer par l'appelant, comme pour
+    detect_largest_face)."""
+    import numpy as np
+    import torch
+    from insightface.utils import face_align
+    from PIL import Image
+
+    img_bgr = np.array(Image.open(image_path).convert("RGB"))[:, :, ::-1]
+    faces = face_app.get(img_bgr)
+    if not faces:
+        raise ValueError(f"Aucun visage détecté par insightface : {image_path}")
+    face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+    aligned_bgr = face_align.norm_crop(img_bgr, face.kps, image_size=size)
+    aligned_rgb = np.ascontiguousarray(aligned_bgr[:, :, ::-1])
+    return torch.from_numpy(aligned_rgb).permute(2, 0, 1).float() / 255.0
+
+
 def check_faces(cfg: dict, block: str) -> dict[str, bool]:
     """Diagnostic AVANT entraînement : détectabilité du mugshot de chaque identité
     distincte du bloc donné. Rapide (insightface seul, pas Arc2Face/diffusers)."""
