@@ -355,6 +355,13 @@ class Arc2FaceGenerator:
         from PIL import Image
 
         self._ensure_loaded()
+        # enable_tiling() (activé dans _ensure_loaded pour l'OOM PENDANT l'entraînement,
+        # où la pression mémoire est critique) découpe le décodage VAE en tuiles
+        # spatiales recollées aux bords -> coutures/artefacts possibles sur une image
+        # unique. À la génération (batch=1, pas de gradient), la mémoire n'est plus un
+        # problème : désactivé ici (artefacts néon persistants malgré toutes les
+        # corrections d'entraînement, cf. 2026-06-27 -> piste indépendante testée).
+        self._pipeline.vae.disable_tiling()
         identity = Path(mugshot_path).stem.split("_")[0]
         id_emb = self._id_embedding(mugshot_path)
         prompt_embeds = self._project_for_conditioning(id_emb).repeat(k, 1, 1)
