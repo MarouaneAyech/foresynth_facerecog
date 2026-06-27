@@ -93,8 +93,19 @@ def stage_train_recognition(cfg: dict) -> None:
 
 def stage_evaluate(cfg: dict) -> None:
     import statistics
+    from pathlib import Path
     from src.recognition.eval import evaluate
     from src.utils.checkpoint import latest_checkpoint
+
+    # Baseline SANS fine-tuning : le backbone pre-entraine (arcface_ms1mv3) tel quel,
+    # comme reference pour juger si un quelconque fine-tuning (real/synthetic/mixed)
+    # apporte vraiment un gain -- pas de seed/checkpoint, deterministe, toujours evalue.
+    baseline_weights = cfg["paths"].get("arcface_weights")
+    if baseline_weights and Path(baseline_weights).exists():
+        rank1_baseline = evaluate(cfg, weights_path=baseline_weights)["visible_d1"]
+        log.info("RANK-1 baseline (sans fine-tuning) : %.4f", rank1_baseline)
+    else:
+        log.info("Baseline sans fine-tuning ignoree : paths.arcface_weights introuvable (%s)", baseline_weights)
 
     for condition in cfg["recognition"]["conditions"]:
         rank1s = []
