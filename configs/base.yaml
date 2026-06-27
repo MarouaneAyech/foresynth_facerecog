@@ -30,6 +30,12 @@ paths:
   arcface_weights: ${paths.pretrained_dir}/arcface/arcface_ms1mv3_r50.pth
   arc2face_models_dir: ${paths.pretrained_dir}     # contient encoder/ et arc2face/ (sinon fallback HF Hub)
   insightface_models_dir: ${paths.pretrained_dir}  # contient antelopev2/ (sinon fallback auto insightface)
+  # Cache persistant (Drive) des tenseurs déjà alignés (landmarks) : évite de
+  # ré-exécuter la détection antelopev2 (CPU, ~1-2s/image) à chaque seed/condition/
+  # évaluation pour une image déjà vue -- même principe que le cache .npy du code
+  # de référence (Pré_alignement_et_mise_en_cache.ipynb), mais alimenté à la volée
+  # (clé = chemin source) plutôt que pré-calculé en un étage séparé.
+  aligned_cache: ${paths.drive_root}/aligned_cache
 
 # --- Partition (anti-fuite) ---
 partition:

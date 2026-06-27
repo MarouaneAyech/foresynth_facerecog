@@ -20,12 +20,13 @@ from src.utils.logging import get_logger
 log = get_logger()
 
 
-def _embed_paths(paths: list[str], embedder, device, face_app, batch_size: int = 32):
+def _embed_paths(paths: list[str], embedder, device, face_app, batch_size: int = 32,
+                  cache_dir: str | None = None):
     """load_aligned_face_tensor ne lève jamais d'erreur (repli sur un simple resize si
     aucun visage détecté, cf. code de référence) : aucune exclusion ici."""
     import torch
 
-    tensors = [load_aligned_face_tensor(p, face_app) for p in paths]
+    tensors = [load_aligned_face_tensor(p, face_app, cache_dir=cache_dir) for p in paths]
     if not tensors:
         return None
     embs = []
@@ -48,14 +49,15 @@ def mean_identity_cosine(cfg: dict) -> float:
     embedder = load_arcface_embedder(cfg)
     device = next(embedder.parameters()).device
     face_app = load_face_app(cfg)
+    cache_dir = cfg["paths"].get("aligned_cache")
 
     per_identity_cos = []
     for identity, real_paths in real_by_id.items():
         synth_paths = sorted(str(p) for p in (synth_root / identity).glob("*.png"))
         if not synth_paths:
             continue  # pas encore généré pour cette identité
-        real_emb = _embed_paths(real_paths, embedder, device, face_app)
-        synth_emb = _embed_paths(synth_paths, embedder, device, face_app)
+        real_emb = _embed_paths(real_paths, embedder, device, face_app, cache_dir=cache_dir)
+        synth_emb = _embed_paths(synth_paths, embedder, device, face_app, cache_dir=cache_dir)
         if real_emb is None or synth_emb is None:
             continue
         per_identity_cos.append((synth_emb @ real_emb.T).mean().item())

@@ -20,10 +20,15 @@ from src.utils.logging import get_logger
 log = get_logger()
 
 
-def _load_aligned_batch(paths: list[str], face_app) -> list:
+def _load_aligned_batch(paths: list[str], face_app, cache_dir: str | None = None) -> list:
     """load_aligned_face_tensor ne lève jamais d'erreur (repli sur un simple resize si
-    aucun visage détecté, cf. code de référence) : aucune exclusion ici."""
-    return [load_aligned_face_tensor(p, face_app) for p in paths]
+    aucun visage détecté, cf. code de référence) : aucune exclusion ici.
+
+    cache_dir (paths.aligned_cache) : réutilise le cache persistant partagé avec
+    recognition/finetune.py -- la galerie/probes du Bloc C ne sont alignées qu'une
+    seule fois, même si evaluate() est appelé plusieurs fois (baseline + un par
+    seed/condition)."""
+    return [load_aligned_face_tensor(p, face_app, cache_dir=cache_dir) for p in paths]
 
 
 def _embed(tensors: list, net, device):
@@ -44,6 +49,7 @@ def evaluate(cfg: dict, weights_path: str) -> dict[str, float]:
     net.load_state_dict(state["net"] if "net" in state else state)
     net.eval()
     face_app = load_face_app(cfg)
+    cache_dir = cfg["paths"].get("aligned_cache")
 
     results: dict[str, float] = {}
     for modality, distance in cfg["eval"]["terrains"]:
@@ -65,8 +71,8 @@ def evaluate(cfg: dict, weights_path: str) -> dict[str, float]:
             probe_paths.append(p.target_path)
             probe_ids.append(p.identity)
 
-        gallery_tensors = _load_aligned_batch(gallery_paths, face_app)
-        probe_tensors = _load_aligned_batch(probe_paths, face_app)
+        gallery_tensors = _load_aligned_batch(gallery_paths, face_app, cache_dir)
+        probe_tensors = _load_aligned_batch(probe_paths, face_app, cache_dir)
 
         gallery_emb = _embed(gallery_tensors, net, device)
         probe_emb = _embed(probe_tensors, net, device)

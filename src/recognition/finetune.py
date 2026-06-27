@@ -92,17 +92,21 @@ def _build_pools(cfg: dict, condition: str) -> tuple[dict[str, list[str]], dict[
     return mugshot_of, surveillance_of
 
 
-def _build_aligned_cache(face_app, mugshot_of: dict, surveillance_of: dict):
+def _build_aligned_cache(face_app, mugshot_of: dict, surveillance_of: dict, cache_dir: str | None = None):
     """Pré-aligne (5 points, ArcFace) et met en cache CHAQUE image distincte une seule
     fois (au lieu de re-détecter/ré-aligner à chaque tirage aléatoire, sur des centaines
     de pas). load_aligned_face_tensor ne lève jamais d'erreur (repli sur un simple
     resize si aucun visage détecté, cf. code de référence) : aucune identité/image
-    n'est exclue ici, juste mise en cache."""
+    n'est exclue ici, juste mise en cache.
+
+    cache_dir (paths.aligned_cache) : persiste aussi sur disque -- une image déjà
+    alignée lors d'un seed/condition précédent (ou d'une évaluation) n'est plus
+    jamais re-détectée, même dans un nouveau processus."""
     cache: dict[str, "object"] = {}
     for identity, paths in mugshot_of.items():
         for p in [paths[0], *surveillance_of.get(identity, [])]:
             if p not in cache:  # setdefault évaluerait load_aligned_face_tensor à chaque
-                cache[p] = load_aligned_face_tensor(p, face_app)  # fois -> pas de cache réel
+                cache[p] = load_aligned_face_tensor(p, face_app, cache_dir=cache_dir)  # fois -> pas de cache réel
     return cache
 
 
@@ -117,7 +121,8 @@ def train(cfg: dict, condition: str, seed: int) -> str:
 
     mugshot_of, surveillance_of = _build_pools(cfg, condition)
     face_app = load_face_app(cfg)
-    aligned_cache = _build_aligned_cache(face_app, mugshot_of, surveillance_of)
+    aligned_cache = _build_aligned_cache(face_app, mugshot_of, surveillance_of,
+                                          cache_dir=cfg["paths"].get("aligned_cache"))
     identities = sorted(mugshot_of)
     label_of = {identity: i for i, identity in enumerate(identities)}
 

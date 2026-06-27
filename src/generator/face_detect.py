@@ -53,7 +53,14 @@ def detect_largest_face(face_app, image_path: str):
     return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
 
 
-def load_aligned_face_tensor(image_path: str, face_app, size: int = 112):
+def _cache_path(cache_dir: str, image_path: str, size: int) -> Path:
+    import hashlib
+
+    key = hashlib.sha1(f"{Path(image_path).resolve()}|{size}".encode()).hexdigest()
+    return Path(cache_dir) / f"{key}.pt"
+
+
+def load_aligned_face_tensor(image_path: str, face_app, size: int = 112, cache_dir: str | None = None):
     """Charge une image -> tenseur (3,size,size) en [0,1], ALIGNÉ par similarité sur
     les 5 points de repère (yeux/nez/bouche), convention ArcFace standard.
 
@@ -66,9 +73,20 @@ def load_aligned_face_tensor(image_path: str, face_app, size: int = 112):
     Repli sur un simple resize si AUCUN visage n'est détecté, sans jamais lever
     d'erreur ni exclure l'image -- comportement aligné sur le code de référence
     (Pré_alignement_et_mise_en_cache.ipynb : même repli silencieux), qui ne rejette
-    jamais une image plutôt que de perdre des données."""
-    import numpy as np
+    jamais une image plutôt que de perdre des données.
+
+    cache_dir (optionnel, paths.aligned_cache) : persiste le résultat sur disque,
+    clé = chemin source + taille. La détection (coûteuse, CPU) n'est alors exécutée
+    qu'une seule fois par image, quel que soit le nombre d'appels ultérieurs
+    (autres seeds, autres conditions, évaluations) -- au lieu de la recommencer à
+    chaque appel de train()/evaluate(), comme c'était le cas avant ce correctif."""
     import torch
+
+    cache_file = _cache_path(cache_dir, image_path, size) if cache_dir else None
+    if cache_file is not None and cache_file.exists():
+        return torch.load(cache_file)
+
+    import numpy as np
     from insightface.utils import face_align
     from PIL import Image
 
@@ -82,7 +100,12 @@ def load_aligned_face_tensor(image_path: str, face_app, size: int = 112):
         get_logger().warning("Aucun visage détecté, repli sur un simple resize : %s", image_path)
         aligned_bgr = np.array(Image.open(image_path).convert("RGB").resize((size, size)))[:, :, ::-1]
     aligned_rgb = np.ascontiguousarray(aligned_bgr[:, :, ::-1])
-    return torch.from_numpy(aligned_rgb).permute(2, 0, 1).float() / 255.0
+    tensor = torch.from_numpy(aligned_rgb).permute(2, 0, 1).float() / 255.0
+
+    if cache_file is not None:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(tensor, cache_file)
+    return tensor
 
 
 def check_faces(cfg: dict, block: str) -> dict[str, bool]:
