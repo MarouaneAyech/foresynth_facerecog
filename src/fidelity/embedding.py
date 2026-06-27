@@ -21,16 +21,11 @@ log = get_logger()
 
 
 def _embed_paths(paths: list[str], embedder, device, face_app, batch_size: int = 32):
-    """Charge en aligné ; exclut (log warning) les images sans visage détecté plutôt
-    que de planter sur un échantillon synthétique atypique."""
+    """load_aligned_face_tensor ne lève jamais d'erreur (repli sur un simple resize si
+    aucun visage détecté, cf. code de référence) : aucune exclusion ici."""
     import torch
 
-    tensors = []
-    for p in paths:
-        try:
-            tensors.append(load_aligned_face_tensor(p, face_app))
-        except ValueError as e:
-            log.warning("Exclu du calcul de fidélité (visage non détecté) : %s", e)
+    tensors = [load_aligned_face_tensor(p, face_app) for p in paths]
     if not tensors:
         return None
     embs = []

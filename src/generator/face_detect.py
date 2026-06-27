@@ -34,7 +34,10 @@ def load_face_app(cfg: dict):
         name=pack_name,
         providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
         if device == "cuda" else ["CPUExecutionProvider"])
-    app.prepare(ctx_id=0 if device == "cuda" else -1, det_size=(640, 640))
+    # det_size=320 (pas 640) : valeur utilisée de façon cohérente dans tout le code de
+    # référence old_code_paper_classB (pré-alignement ET évaluation), conservée pour
+    # rester comparable.
+    app.prepare(ctx_id=0 if device == "cuda" else -1, det_size=(320, 320))
     return app
 
 
@@ -60,8 +63,10 @@ def load_aligned_face_tensor(image_path: str, face_app, size: int = 112):
     d'alignement canonique de l'écosystème InsightFace (même principe que le cache
     pré-aligné du code de référence B1, construit via antelopev2).
 
-    Lève ValueError si aucun visage n'est détecté (à gérer par l'appelant, comme pour
-    detect_largest_face)."""
+    Repli sur un simple resize si AUCUN visage n'est détecté, sans jamais lever
+    d'erreur ni exclure l'image -- comportement aligné sur le code de référence
+    (Pré_alignement_et_mise_en_cache.ipynb : même repli silencieux), qui ne rejette
+    jamais une image plutôt que de perdre des données."""
     import numpy as np
     import torch
     from insightface.utils import face_align
@@ -69,10 +74,13 @@ def load_aligned_face_tensor(image_path: str, face_app, size: int = 112):
 
     img_bgr = np.array(Image.open(image_path).convert("RGB"))[:, :, ::-1]
     faces = face_app.get(img_bgr)
-    if not faces:
-        raise ValueError(f"Aucun visage détecté par insightface : {image_path}")
-    face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-    aligned_bgr = face_align.norm_crop(img_bgr, face.kps, image_size=size)
+    if faces:
+        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        aligned_bgr = face_align.norm_crop(img_bgr, face.kps, image_size=size)
+    else:
+        from src.utils.logging import get_logger
+        get_logger().warning("Aucun visage détecté, repli sur un simple resize : %s", image_path)
+        aligned_bgr = np.array(Image.open(image_path).convert("RGB").resize((size, size)))[:, :, ::-1]
     aligned_rgb = np.ascontiguousarray(aligned_bgr[:, :, ::-1])
     return torch.from_numpy(aligned_rgb).permute(2, 0, 1).float() / 255.0
 

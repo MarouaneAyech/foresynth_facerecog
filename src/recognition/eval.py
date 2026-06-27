@@ -20,17 +20,10 @@ from src.utils.logging import get_logger
 log = get_logger()
 
 
-def _load_aligned_batch(paths: list[str], ids: list[str], face_app) -> tuple[list, list[str]]:
-    """Charge en aligné, EXCLUT silencieusement (log warning) les images sans visage
-    détecté plutôt que de planter toute l'évaluation pour un cas atypique."""
-    tensors, kept_ids = [], []
-    for path, identity in zip(paths, ids):
-        try:
-            tensors.append(load_aligned_face_tensor(path, face_app))
-            kept_ids.append(identity)
-        except ValueError as e:
-            log.warning("Exclu de l'évaluation (visage non détecté) : %s", e)
-    return tensors, kept_ids
+def _load_aligned_batch(paths: list[str], face_app) -> list:
+    """load_aligned_face_tensor ne lève jamais d'erreur (repli sur un simple resize si
+    aucun visage détecté, cf. code de référence) : aucune exclusion ici."""
+    return [load_aligned_face_tensor(p, face_app) for p in paths]
 
 
 def _embed(tensors: list, net, device):
@@ -72,13 +65,8 @@ def evaluate(cfg: dict, weights_path: str) -> dict[str, float]:
             probe_paths.append(p.target_path)
             probe_ids.append(p.identity)
 
-        gallery_tensors, gallery_ids = _load_aligned_batch(gallery_paths, gallery_ids, face_app)
-        valid_gallery_ids = set(gallery_ids)
-        # Une probe dont la galerie de référence est introuvable (mugshot non détecté)
-        # ne peut de toute façon jamais être correctement appariée : exclue aussi.
-        kept = [(p, i) for p, i in zip(probe_paths, probe_ids) if i in valid_gallery_ids]
-        probe_paths, probe_ids = [p for p, _ in kept], [i for _, i in kept]
-        probe_tensors, probe_ids = _load_aligned_batch(probe_paths, probe_ids, face_app)
+        gallery_tensors = _load_aligned_batch(gallery_paths, face_app)
+        probe_tensors = _load_aligned_batch(probe_paths, face_app)
 
         gallery_emb = _embed(gallery_tensors, net, device)
         probe_emb = _embed(probe_tensors, net, device)

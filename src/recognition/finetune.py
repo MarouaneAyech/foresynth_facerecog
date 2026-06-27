@@ -95,39 +95,14 @@ def _build_pools(cfg: dict, condition: str) -> tuple[dict[str, list[str]], dict[
 def _build_aligned_cache(face_app, mugshot_of: dict, surveillance_of: dict):
     """Pré-aligne (5 points, ArcFace) et met en cache CHAQUE image distincte une seule
     fois (au lieu de re-détecter/ré-aligner à chaque tirage aléatoire, sur des centaines
-    de pas) -- exclut proprement les identités dont le mugshot n'est pas détectable, et
-    les images de surveillance individuelles non détectables (sans exclure l'identité si
-    au moins une image valide reste)."""
+    de pas). load_aligned_face_tensor ne lève jamais d'erreur (repli sur un simple
+    resize si aucun visage détecté, cf. code de référence) : aucune identité/image
+    n'est exclue ici, juste mise en cache."""
     cache: dict[str, "object"] = {}
-    excluded_identities = set()
-
-    def _try_load(path: str):
-        if path in cache:
-            return True
-        try:
-            cache[path] = load_aligned_face_tensor(path, face_app)
-            return True
-        except ValueError as e:
-            log.warning("Image exclue (visage non détecté) : %s", e)
-            return False
-
-    for identity, paths in list(mugshot_of.items()):
-        if not _try_load(paths[0]):
-            excluded_identities.add(identity)
-            continue
-        valid_surv = [p for p in surveillance_of.get(identity, []) if _try_load(p)]
-        if not valid_surv:
-            log.warning("Identité %s exclue : aucune image de surveillance détectable.", identity)
-            excluded_identities.add(identity)
-        else:
-            surveillance_of[identity] = valid_surv
-
-    if excluded_identities:
-        for identity in excluded_identities:
-            mugshot_of.pop(identity, None)
-            surveillance_of.pop(identity, None)
-        log.warning("%d identité(s) exclue(s) du fine-tuning (détection) : %s",
-                    len(excluded_identities), sorted(excluded_identities))
+    for identity, paths in mugshot_of.items():
+        for p in [paths[0], *surveillance_of.get(identity, [])]:
+            if p not in cache:  # setdefault évaluerait load_aligned_face_tensor à chaque
+                cache[p] = load_aligned_face_tensor(p, face_app)  # fois -> pas de cache réel
     return cache
 
 
@@ -143,8 +118,6 @@ def train(cfg: dict, condition: str, seed: int) -> str:
     mugshot_of, surveillance_of = _build_pools(cfg, condition)
     face_app = load_face_app(cfg)
     aligned_cache = _build_aligned_cache(face_app, mugshot_of, surveillance_of)
-    if not mugshot_of:
-        raise RuntimeError("Aucune identité valide après exclusion des échecs de détection.")
     identities = sorted(mugshot_of)
     label_of = {identity: i for i, identity in enumerate(identities)}
 
