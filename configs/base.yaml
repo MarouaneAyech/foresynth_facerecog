@@ -55,7 +55,15 @@ generator:
     rank: 16
     alpha: 16
     target_modules: [to_q, to_k, to_v, to_out.0]  # couches attention UNet
-  identity_loss_weight: 0.5   # poids cosinus ArcFace
+  # Mis a 0.0 (test, 2026-06-28) : meme avec degrade_prior=false, aucune trace de
+  # degradation type CCTV n'apparait (toujours net, cf. comparaison
+  # degradation_vs_real_001.png) -- hypothese : identity_loss (cosinus ArcFace,
+  # qui recompense structurellement un visage NET, plus facile a reconnaitre)
+  # est en tension directe avec diffusion_loss (qui demande de reproduire une
+  # cible degradee/floue). Coupe temporairement pour verifier si une vraie
+  # degradation emerge sans ce conflit -- la perte d'identite sera reevaluee
+  # separement apres coup (cosinus synth vs reel, Bloc B).
+  identity_loss_weight: 0.0   # poids cosinus ArcFace (normalement 0.5)
   # Desactive (2026-06-28) : appliquait une degradation SUPPLEMENTAIRE et agressive
   # (flou+resize+bruit+JPEG, EMPILEE 2x) sur la cible reelle d1 deja degradee par la
   # vraie camera -- decalage de distribution trop important pour une LoRA de faible
