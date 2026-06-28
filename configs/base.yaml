@@ -56,7 +56,16 @@ generator:
     alpha: 16
     target_modules: [to_q, to_k, to_v, to_out.0]  # couches attention UNet
   identity_loss_weight: 0.5   # poids cosinus ArcFace
-  degrade_prior: true         # amorce Real-ESRGAN (aide la LoRA à atteindre la dégradation)
+  # Desactive (2026-06-28) : appliquait une degradation SUPPLEMENTAIRE et agressive
+  # (flou+resize+bruit+JPEG, EMPILEE 2x) sur la cible reelle d1 deja degradee par la
+  # vraie camera -- decalage de distribution trop important pour une LoRA de faible
+  # rang (rank=16) : a l'inference, aucune trace de degradation a basse intensite
+  # (lora_scale<=0.6), seulement de l'instabilite/bruit a haute intensite (>=0.8),
+  # jamais un etat ressemblant a une vraie capture SCface d1 (cf. comparaison directe
+  # degradation_vs_real_001.png). Hypothese a verifier : la cible reelle d1 SEULE
+  # (sans degradation synthetique ajoutee) est un signal plus modeste, plus a portee
+  # d'une LoRA de ce rang.
+  degrade_prior: false
   samples_per_identity: 20    # K : diversité intra-classe
   sample:                     # génération (stage 'generate', Arc2FaceGenerator.sample)
     num_inference_steps: 25
