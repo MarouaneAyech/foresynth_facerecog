@@ -68,6 +68,12 @@ generator:
     # cf. discussion 2026-06-26) : 0.0 = désactivé (comportement standard). Agit
     # uniquement à l'inférence, aucun ré-entraînement requis pour tester une valeur.
     identity_guidance_strength: 0.0
+    # A pleine intensite (1.0), la LoRA entrainee derive le std des latents
+    # d'environ 1.0 a 1.7 sur les 25 pas de debruitage (verifie independamment du
+    # solveur, DPMSolverMultistep ET DDIM) -> decodage VAE en bruit pur (incident
+    # du 2026-06-28). Diviser par 2 (0.5) restaure un visage net sur le meme
+    # checkpoint, sans necessiter de re-entrainement. A recalibrer par checkpoint.
+    lora_scale: 0.5
   train:
     lr: 1.0e-4
     lr_scheduler: cosine      # constant -> cosine : decroit vers 0 plutot que rester

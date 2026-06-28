@@ -371,6 +371,33 @@ class Arc2FaceGenerator:
 
         sample_cfg = self.cfg["generator"]["sample"]
         guidance_strength = sample_cfg.get("identity_guidance_strength", 0.0)
+        # À pleine intensité, la LoRA entraînée pousse le débruitage hors de la
+        # distribution attendue par le VAE : le std des latents derive de ~1.0 a ~1.7
+        # sur les 25 pas (verifie avec DPMSolverMultistepScheduler ET DDIMScheduler,
+        # donc independant du solveur) -> decodage en bruit pur, incident du
+        # 2026-06-28. Diviser par 2 la matrice lora_B (= moitie de la contribution
+        # delta = lora_B @ lora_A) a restaure un visage net (sans le retouner
+        # neon/posterise connu) sur le meme checkpoint. Restauree apres generation
+        # pour ne pas affecter une eventuelle reprise d'entrainement (fit()) dans le
+        # meme processus.
+        lora_scale = sample_cfg.get("lora_scale", 1.0)
+        scaled_params: list = []
+        if lora_scale != 1.0:
+            for name, p in self._pipeline.unet.named_parameters():
+                if p.requires_grad and "lora_B" in name:
+                    p.data.mul_(lora_scale)
+                    scaled_params.append(p)
+        try:
+            paths = self._sample_loop(prompt_embeds, k, identity, out_dir, sample_cfg, guidance_strength, id_emb)
+        finally:
+            if lora_scale != 1.0:
+                for p in scaled_params:
+                    p.data.div_(lora_scale)
+        return paths
+
+    def _sample_loop(self, prompt_embeds, k, identity, out_dir, sample_cfg, guidance_strength, id_emb):
+        import torch
+
         paths = []
         for idx in range(k):
             generator = torch.Generator(device=self._device).manual_seed(idx)
