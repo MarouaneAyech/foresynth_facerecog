@@ -395,6 +395,7 @@ class Arc2FaceGenerator:
         # pour ne pas affecter une eventuelle reprise d'entrainement (fit()) dans le
         # meme processus.
         lora_scale = sample_cfg.get("lora_scale", 1.0)
+        log.info("sample(%s) : lora_scale=%.3f", identity, lora_scale)
         scaled_params: list = []
         if lora_scale != 1.0:
             for name, p in self._pipeline.unet.named_parameters():
