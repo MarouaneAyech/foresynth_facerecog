@@ -101,12 +101,13 @@ generator:
     # cf. discussion 2026-06-26) : 0.0 = désactivé (comportement standard). Agit
     # uniquement à l'inférence, aucun ré-entraînement requis pour tester une valeur.
     identity_guidance_strength: 0.0
-    # A pleine intensite (1.0), la LoRA entrainee derive le std des latents
-    # d'environ 1.0 a 1.7 sur les 25 pas de debruitage (verifie independamment du
-    # solveur, DPMSolverMultistep ET DDIM) -> decodage VAE en bruit pur (incident
-    # du 2026-06-28). Diviser par 2 (0.5) restaure un visage net sur le meme
-    # checkpoint, sans necessiter de re-entrainement. A recalibrer par checkpoint.
-    lora_scale: 0.5
+    # Recalibre (2026-06-29) avec la LoRA rsLoRA rang 32 + conv, entrainee jusqu'a
+    # 4000 pas : balayage fin sur l'identite 001 montre une fenetre cohérente de
+    # degradation (flou/grain, pas d'artefact) de 0.40 a 0.60, contre un effondrement
+    # en bruit avant 0.6 avec l'ancienne LoRA (sans rsLoRA). Fixe a 0.55 (milieu-haut
+    # de la fenetre, degradation la plus marquee avant le debut des bandes en fond) --
+    # a reconfirmer par le test de fidelite complet (FID/cosinus, tout le Bloc B).
+    lora_scale: 0.55
   train:
     lr: 1.0e-4
     lr_scheduler: cosine      # constant -> cosine : decroit vers 0 plutot que rester
