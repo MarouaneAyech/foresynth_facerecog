@@ -118,8 +118,22 @@ class Arc2FaceGenerator:
         if self.adapter == "lora":
             from peft import LoraConfig
             lora_cfg = self.cfg["generator"]["lora"]
+            rank, alpha = lora_cfg["rank"], lora_cfg["alpha"]
+            # rsLoRA (Kalajdzievski 2023) : peft 0.7.1 calcule TOUJOURS l'echelle
+            # interne comme lora_alpha/r (pas de flag use_rslora avant des versions
+            # plus recentes de peft, hors de portee ici -- transformers==4.36.0 figé
+            # casse avec un peft plus recent, cf. requirements.txt). On obtient
+            # exactement l'echelle rsLoRA (alpha/sqrt(r) au lieu de alpha/r) en
+            # passant a peft un lora_alpha PRE-CORRIGE : alpha*sqrt(r)/r*r = alpha*sqrt(r)
+            # -> peft calcule alors (alpha*sqrt(r))/r = alpha/sqrt(r), la vraie formule
+            # rsLoRA. Motivation : passer rank=16->32 a AGGRAVE l'instabilite a
+            # l'inference (cf. incident 2026-06-29) plutot que de l'ameliorer -- signe
+            # documente que l'echelle alpha/r (qui maintient une echelle nominale
+            # constante alpha=r) ne se comporte pas bien quand r augmente ; rsLoRA est
+            # concu precisement pour stabiliser l'entrainement a rang eleve.
+            peft_alpha = round(alpha * (rank ** 0.5)) if lora_cfg.get("rs_lora", False) else alpha
             unet.add_adapter(LoraConfig(
-                r=lora_cfg["rank"], lora_alpha=lora_cfg["alpha"],
+                r=rank, lora_alpha=peft_alpha,
                 target_modules=lora_cfg["target_modules"]))
             trainable = [p for p in unet.parameters() if p.requires_grad]
             # La LoRA est créée au dtype de la base (float16 sur GPU, cf. _ensure_loaded).

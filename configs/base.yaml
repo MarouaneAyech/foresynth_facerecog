@@ -65,6 +65,12 @@ generator:
     rank: 32
     alpha: 32
     target_modules: [to_q, to_k, to_v, to_out.0, conv1, conv2]
+    # rsLoRA (2026-06-29) : passer de rang 16 a 32 a AGGRAVE l'instabilite a
+    # l'inference (cf. incident precedent) -- l'echelle classique alpha/r ne se
+    # comporte pas bien a rang eleve (documente, Kalajdzievski 2023). Bascule sur
+    # alpha/sqrt(r) (cf. base_arc2face.py::_setup_adapter, peft 0.7.1 n'a pas le
+    # flag natif use_rslora -- reproduit manuellement via un lora_alpha pre-corrige).
+    rs_lora: true
   # Mis a 0.0 (test, 2026-06-28) : meme avec degrade_prior=false, aucune trace de
   # degradation type CCTV n'apparait (toujours net, cf. comparaison
   # degradation_vs_real_001.png) -- hypothese : identity_loss (cosinus ArcFace,
