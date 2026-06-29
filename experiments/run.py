@@ -3,7 +3,8 @@
 Usage:
   python -m experiments.run --config configs/visible_d1.yaml --stage smoke
   python -m experiments.run --config configs/visible_d1.yaml --stage partition
-  ... check_faces | train_generator | generate | fidelity | train_recognition | evaluate
+  ... check_faces | train_generator | generate | filter_synthetic | fidelity |
+      train_recognition | evaluate
 """
 from __future__ import annotations
 import argparse
@@ -14,7 +15,7 @@ from src.utils.seed import set_seed
 
 log = get_logger()
 STAGES = ["smoke", "partition", "check_faces", "train_generator", "generate",
-          "fidelity", "train_recognition", "evaluate"]
+          "filter_synthetic", "fidelity", "train_recognition", "evaluate"]
 
 
 def stage_smoke(cfg: dict) -> None:
@@ -75,6 +76,15 @@ def stage_generate(cfg: dict) -> None:
         log.info("Identité %s : %d échantillons générés", identity, k)
 
 
+def stage_filter_synthetic(cfg: dict) -> None:
+    """Optionnel, entre 'generate' et 'train_recognition'/'fidelity' : retire du
+    pool d'entraînement les échantillons synthétiques dont l'identité n'est pas
+    assez préservée (cosinus ArcFace par image -- le FID, lui, n'est pas
+    définissable par image, cf. src/fidelity/filter.py)."""
+    from src.fidelity.filter import filter_synthetic
+    filter_synthetic(cfg)
+
+
 def stage_fidelity(cfg: dict) -> None:
     from src.fidelity import fid, embedding, gate
     f = fid.compute_fid(cfg)
@@ -126,6 +136,7 @@ def stage_evaluate(cfg: dict) -> None:
 DISPATCH = {
     "smoke": stage_smoke, "partition": stage_partition, "check_faces": stage_check_faces,
     "train_generator": stage_train_generator, "generate": stage_generate,
+    "filter_synthetic": stage_filter_synthetic,
     "fidelity": stage_fidelity, "train_recognition": stage_train_recognition,
     "evaluate": stage_evaluate,
 }

@@ -122,6 +122,12 @@ fidelity:
   fid_max: 60.0               # seuil à calibrer
   cos_min: 0.45              # cosinus ArcFace min synth<->vrai (même id, Bloc B)
   run_pilot: true
+  # Filtre PAR IMAGE (stage 'filter_synthetic', src/fidelity/filter.py), avant
+  # train_recognition/fidelity -- distinct de cos_min (qui est une moyenne sur
+  # tout le lot d'une identite). Retire le bruit pur (cf. avertissements "aucun
+  # visage detecte"), mais ne garantit PAS une bonne degradation (un cosinus
+  # eleve favorise les images nettes, pas forcement les mieux degradees).
+  filter_cos_min: 0.45
 
 # --- Reconnaissance (recette B1, alignée sur old_code_paper_classB le 2026-06-27) ---
 recognition:
