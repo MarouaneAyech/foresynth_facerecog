@@ -101,13 +101,25 @@ generator:
     # cf. discussion 2026-06-26) : 0.0 = désactivé (comportement standard). Agit
     # uniquement à l'inférence, aucun ré-entraînement requis pour tester une valeur.
     identity_guidance_strength: 0.0
-    # Recalibre (2026-06-29) avec la LoRA rsLoRA rang 32 + conv, entrainee jusqu'a
-    # 4000 pas : balayage fin sur l'identite 001 montre une fenetre cohérente de
-    # degradation (flou/grain, pas d'artefact) de 0.40 a 0.60, contre un effondrement
-    # en bruit avant 0.6 avec l'ancienne LoRA (sans rsLoRA). Fixe a 0.55 (milieu-haut
-    # de la fenetre, degradation la plus marquee avant le debut des bandes en fond) --
-    # a reconfirmer par le test de fidelite complet (FID/cosinus, tout le Bloc B).
-    lora_scale: 0.55
+    # lora_scale: repli STATIQUE, utilise seulement si auto_calibrate_lora_scale
+    # est false, OU si aucun candidat de la calibration n'a passe le seuil
+    # (cf. _calibrate_lora_scale). 0.45 = valeur prudente, a l'interieur de la
+    # fenetre coherente [0.40-0.60] observee avec rsLoRA rang 32 + conv (4000 pas),
+    # mais 0.55 a deja montre de l'instabilite sur certaines identites du Bloc B
+    # (cf. incident 2026-06-29) -- d'ou le passage a une calibration PAR IDENTITE.
+    lora_scale: 0.45
+    # Calibration automatique (2026-06-29) : le seuil reel d'instabilite depend du
+    # contenu de l'embedding d'identite (observe : stable sur une identite,
+    # instable sur une autre, a la MEME echelle) -- une echelle fixe pour les 50
+    # identites du Bloc B est donc un compromis. Teste, par identite, chaque
+    # candidat decroissant (un seul debruitage rapide, sans decodage VAE) et
+    # retient le plus grand dont le std final du latent reste sous le seuil.
+    auto_calibrate_lora_scale: true
+    lora_scale_candidates: [0.60, 0.55, 0.50, 0.45, 0.40]
+    # std_max=1.3 : estimation de depart d'apres les diagnostics precedents
+    # (effondrement en bruit correle a un std final nettement >1.3-1.7) -- a
+    # recalibrer si la degradation reste instable ou au contraire toujours nette.
+    lora_scale_std_max: 1.3
   train:
     lr: 1.0e-4
     lr_scheduler: cosine      # constant -> cosine : decroit vers 0 plutot que rester

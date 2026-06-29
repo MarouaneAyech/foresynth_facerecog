@@ -362,10 +362,65 @@ class Arc2FaceGenerator:
 
         return callback
 
+    # ------------------------------------------------------------ lora_scale
+    def _apply_lora_scale(self, scale: float) -> list:
+        """Multiplie lora_B par scale (delta = lora_B @ lora_A -> contribution
+        mise à l'échelle). À restaurer via _restore_lora_scale (cf. sample())."""
+        scaled_params = []
+        if scale != 1.0:
+            for name, p in self._pipeline.unet.named_parameters():
+                if p.requires_grad and "lora_B" in name:
+                    p.data.mul_(scale)
+                    scaled_params.append(p)
+        return scaled_params
+
+    def _restore_lora_scale(self, scaled_params: list, scale: float) -> None:
+        if scale != 1.0:
+            for p in scaled_params:
+                p.data.div_(scale)
+
+    def _calibrate_lora_scale(self, prompt_embed_single, sample_cfg: dict) -> tuple[float, list]:
+        """Cherche, PAR IDENTITÉ, la plus grande lora_scale (parmi les candidats
+        décroissants de sample_cfg['lora_scale_candidates']) dont le std final du
+        latent -- un seul débruitage test, sans décodage VAE (rapide), seed fixe
+        pour la reproductibilité -- reste sous sample_cfg['lora_scale_std_max'].
+
+        Motivation (2026-06-29) : le seuil réel d'instabilité dépend du contenu de
+        l'embedding d'identité (observé : une échelle stable sur un échantillon
+        devient instable sur un autre) -- une lora_scale fixe pour les 50 identités
+        du Bloc B est donc nécessairement un compromis, trop prudent pour certaines,
+        encore limite pour d'autres. std_max=1.3 (config) est une estimation de
+        départ d'après les diagnostics précédents (effondrement en bruit corrélé à
+        un std final nettement >1.3-1.7) -- à recalibrer si les résultats détonnent."""
+        import torch
+
+        candidates = sample_cfg["lora_scale_candidates"]
+        std_max = sample_cfg["lora_scale_std_max"]
+        trials = []
+        for scale in candidates:
+            scaled_params = self._apply_lora_scale(scale)
+            try:
+                generator = torch.Generator(device=self._device).manual_seed(0)
+                with torch.no_grad():
+                    latents = self._pipeline(
+                        prompt_embeds=prompt_embed_single,
+                        num_inference_steps=sample_cfg["num_inference_steps"],
+                        guidance_scale=sample_cfg["guidance_scale"],
+                        generator=generator, output_type="latent").images
+                std = latents.std().item()
+            finally:
+                self._restore_lora_scale(scaled_params, scale)
+            trials.append({"scale": scale, "std": round(std, 4)})
+            if std <= std_max:
+                return scale, trials
+        # Aucun candidat sous le seuil : repli sur le plus prudent (dernier de la liste).
+        return candidates[-1], trials
+
     # --------------------------------------------------------------------- sample
     def sample(self, mugshot_path: str, k: int) -> list[str]:
         """Génère k échantillons (diversité intra-classe) ; sauve sous paths.synth_dataset."""
-        import torch
+        import json
+        import datetime
         from PIL import Image
 
         self._ensure_loaded()
@@ -389,25 +444,37 @@ class Arc2FaceGenerator:
         # distribution attendue par le VAE : le std des latents derive de ~1.0 a ~1.7
         # sur les 25 pas (verifie avec DPMSolverMultistepScheduler ET DDIMScheduler,
         # donc independant du solveur) -> decodage en bruit pur, incident du
-        # 2026-06-28. Diviser par 2 la matrice lora_B (= moitie de la contribution
-        # delta = lora_B @ lora_A) a restaure un visage net (sans le retouner
-        # neon/posterise connu) sur le meme checkpoint. Restauree apres generation
-        # pour ne pas affecter une eventuelle reprise d'entrainement (fit()) dans le
-        # meme processus.
-        lora_scale = sample_cfg.get("lora_scale", 1.0)
-        log.info("sample(%s) : lora_scale=%.3f", identity, lora_scale)
-        scaled_params: list = []
-        if lora_scale != 1.0:
-            for name, p in self._pipeline.unet.named_parameters():
-                if p.requires_grad and "lora_B" in name:
-                    p.data.mul_(lora_scale)
-                    scaled_params.append(p)
+        # 2026-06-28. Reduire la matrice lora_B (= contribution delta = lora_B @
+        # lora_A) restaure un visage net/degrade sur le meme checkpoint. Restauree
+        # apres generation pour ne pas affecter une eventuelle reprise
+        # d'entrainement (fit()) dans le meme processus.
+        if sample_cfg.get("auto_calibrate_lora_scale", False):
+            lora_scale, trials = self._calibrate_lora_scale(prompt_embeds[:1], sample_cfg)
+            calibration_mode = "auto"
+        else:
+            lora_scale, trials = sample_cfg.get("lora_scale", 1.0), None
+            calibration_mode = "fixed"
+        log.info("sample(%s) : lora_scale=%.3f (%s)", identity, lora_scale, calibration_mode)
+
+        # Persiste la decision PAR IDENTITE (et les essais de calibration, si
+        # applicable) a cote des images generees -- traçabilite/reproductibilite,
+        # plutot que de ne garder que la valeur globale de la config.
+        manifest = {
+            "identity": identity,
+            "lora_scale": lora_scale,
+            "calibration_mode": calibration_mode,
+            "calibration_trials": trials,
+            "std_max": sample_cfg.get("lora_scale_std_max"),
+            "checkpoint_tag": f"generator_{self.cfg['modality']}_{self.cfg['distance']}",
+            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        }
+        (out_dir / "lora_scale_info.json").write_text(json.dumps(manifest, indent=2))
+
+        scaled_params = self._apply_lora_scale(lora_scale)
         try:
             paths = self._sample_loop(prompt_embeds, k, identity, out_dir, sample_cfg, guidance_strength, id_emb)
         finally:
-            if lora_scale != 1.0:
-                for p in scaled_params:
-                    p.data.div_(lora_scale)
+            self._restore_lora_scale(scaled_params, lora_scale)
         return paths
 
     def _sample_loop(self, prompt_embeds, k, identity, out_dir, sample_cfg, guidance_strength, id_emb):
