@@ -115,11 +115,21 @@ generator:
     # candidat decroissant (un seul debruitage rapide, sans decodage VAE) et
     # retient le plus grand dont le std final du latent reste sous le seuil.
     auto_calibrate_lora_scale: true
-    lora_scale_candidates: [0.60, 0.55, 0.50, 0.45, 0.40]
-    # std_max=1.3 : estimation de depart d'apres les diagnostics precedents
-    # (effondrement en bruit correle a un std final nettement >1.3-1.7) -- a
-    # recalibrer si la degradation reste instable ou au contraire toujours nette.
-    lora_scale_std_max: 1.3
+    # Intervalle resserre et abaisse (2026-06-29, sur demande explicite de
+    # prudence) : 0.55-0.60 ont deja montre de l'instabilite sur certaines
+    # identites du Bloc B malgre un test positif a seed=0 -- on ne propose plus
+    # ces valeurs comme candidats du tout, plutot que de compter sur le seuil
+    # std_max seul pour les rejeter.
+    lora_scale_candidates: [0.50, 0.45, 0.40, 0.35, 0.30]
+    # std_max abaisse (1.3->1.2) : marge de securite supplementaire, toujours une
+    # estimation a recalibrer si la degradation reste instable ou au contraire
+    # toujours nette.
+    lora_scale_std_max: 1.2
+    # Plusieurs graines testees par candidat (pas seulement seed=0) : le pire des
+    # essais doit passer le seuil, pas seulement le meilleur -- une seule graine
+    # ne garantit pas que les k=20 graines reellement utilisees par sample()
+    # restent stables (limite identifiee le 2026-06-29).
+    lora_scale_calibration_seeds: 3
   train:
     lr: 1.0e-4
     lr_scheduler: cosine      # constant -> cosine : decroit vers 0 plutot que rester

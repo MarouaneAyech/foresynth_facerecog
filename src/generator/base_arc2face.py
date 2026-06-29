@@ -382,38 +382,45 @@ class Arc2FaceGenerator:
     def _calibrate_lora_scale(self, prompt_embed_single, sample_cfg: dict) -> tuple[float, list]:
         """Cherche, PAR IDENTITÉ, la plus grande lora_scale (parmi les candidats
         décroissants de sample_cfg['lora_scale_candidates']) dont le std final du
-        latent -- un seul débruitage test, sans décodage VAE (rapide), seed fixe
-        pour la reproductibilité -- reste sous sample_cfg['lora_scale_std_max'].
+        latent -- plusieurs débruitages test (sample_cfg['lora_scale_calibration_seeds']
+        graines), sans décodage VAE (rapide) -- reste sous sample_cfg['lora_scale_std_max']
+        pour TOUTES les graines testées (le pire des essais doit passer, pas
+        seulement le meilleur).
 
         Motivation (2026-06-29) : le seuil réel d'instabilité dépend du contenu de
         l'embedding d'identité (observé : une échelle stable sur un échantillon
         devient instable sur un autre) -- une lora_scale fixe pour les 50 identités
-        du Bloc B est donc nécessairement un compromis, trop prudent pour certaines,
-        encore limite pour d'autres. std_max=1.3 (config) est une estimation de
-        départ d'après les diagnostics précédents (effondrement en bruit corrélé à
-        un std final nettement >1.3-1.7) -- à recalibrer si les résultats détonnent."""
+        du Bloc B est donc nécessairement un compromis. Une seule graine de
+        calibration (seed=0) ne garantit pas que les k=20 graines réellement
+        utilisées par sample() restent stables -- d'où plusieurs graines testées
+        ici, et un seuil/intervalle volontairement prudents (config)."""
         import torch
 
         candidates = sample_cfg["lora_scale_candidates"]
         std_max = sample_cfg["lora_scale_std_max"]
+        n_seeds = sample_cfg.get("lora_scale_calibration_seeds", 1)
         trials = []
         for scale in candidates:
             scaled_params = self._apply_lora_scale(scale)
             try:
-                generator = torch.Generator(device=self._device).manual_seed(0)
-                with torch.no_grad():
-                    latents = self._pipeline(
-                        prompt_embeds=prompt_embed_single,
-                        num_inference_steps=sample_cfg["num_inference_steps"],
-                        guidance_scale=sample_cfg["guidance_scale"],
-                        generator=generator, output_type="latent").images
-                std = latents.std().item()
+                stds = []
+                for seed in range(n_seeds):
+                    generator = torch.Generator(device=self._device).manual_seed(seed)
+                    with torch.no_grad():
+                        latents = self._pipeline(
+                            prompt_embeds=prompt_embed_single,
+                            num_inference_steps=sample_cfg["num_inference_steps"],
+                            guidance_scale=sample_cfg["guidance_scale"],
+                            generator=generator, output_type="latent").images
+                    stds.append(latents.std().item())
             finally:
                 self._restore_lora_scale(scaled_params, scale)
-            trials.append({"scale": scale, "std": round(std, 4)})
-            if std <= std_max:
+            worst_std = max(stds)
+            trials.append({"scale": scale, "stds_per_seed": [round(s, 4) for s in stds],
+                            "worst_std": round(worst_std, 4)})
+            if worst_std <= std_max:
                 return scale, trials
-        # Aucun candidat sous le seuil : repli sur le plus prudent (dernier de la liste).
+        # Aucun candidat sous le seuil pour toutes les graines : repli sur le plus prudent.
         return candidates[-1], trials
 
     # --------------------------------------------------------------------- sample
