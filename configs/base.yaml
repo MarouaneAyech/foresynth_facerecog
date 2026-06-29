@@ -52,9 +52,19 @@ generator:
     arc2face_repo: FoivosPar/Arc2Face                       # HF Hub (subfolders encoder/arc2face)
     insightface_pack: antelopev2                            # extraction embedding ID (conditionnement)
   lora:
-    rank: 16
-    alpha: 16
-    target_modules: [to_q, to_k, to_v, to_out.0]  # couches attention UNet
+    # Rang 16 + attention seule (to_q/to_k/to_v/to_out.0) n'a appris AUCUNE
+    # degradation visible (teste avec degrade_prior=false ET identity_loss=0,
+    # toujours net -- 2026-06-28/29). Hypothese : le flou/la perte de resolution
+    # sont des transformations SPATIALES/texturales, portees par les blocs
+    # convolutifs (ResNet) du UNet, pas par l'attention (qui gere surtout les
+    # interactions token/conditionnement) -- l'attention seule est probablement
+    # le mauvais point d'injection pour ce type de degradation, independamment
+    # du rang. Rang monte a 32 ET conv1/conv2 (blocs ResNet) ajoutes aux couches
+    # ciblees ; cout memoire reste negligeable (quelques M parametres) vs un
+    # fine-tuning complet (~860M, hors de portee d'un T4 15 Go gratuit).
+    rank: 32
+    alpha: 32
+    target_modules: [to_q, to_k, to_v, to_out.0, conv1, conv2]
   # Mis a 0.0 (test, 2026-06-28) : meme avec degrade_prior=false, aucune trace de
   # degradation type CCTV n'apparait (toujours net, cf. comparaison
   # degradation_vs_real_001.png) -- hypothese : identity_loss (cosinus ArcFace,
