@@ -8,5 +8,10 @@ generator:
   sample:
     lora_scale: 0.42
     auto_calibrate_lora_scale: false
+    # Filtre desactive pour l'IR : compare cosinus ArcFace (entraine sur RGB) entre
+    # images generees RGB et references reelles IR (niveaux de gris -> canal triplique).
+    # Comparaison cross-modale -> cosinus systematiquement < 0.45, tout est rejete.
+    # Le filtrage d'identite reste fait a posteriori par stage fidelity/filter_synthetic.
+    filter_during_generation: false
 eval:
   terrains: [["ir","d1"]]
