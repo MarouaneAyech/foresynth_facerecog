@@ -5,5 +5,8 @@ modality: ir
 distance: d1
 generator:
   adapter: lora          # TODO(claude): comparer lora vs full_finetune pour l'IR
+  sample:
+    lora_scale: 0.42
+    auto_calibrate_lora_scale: false
 eval:
   terrains: [["ir","d1"]]
