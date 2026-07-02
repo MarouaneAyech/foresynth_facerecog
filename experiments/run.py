@@ -110,9 +110,12 @@ def stage_evaluate(cfg: dict) -> None:
     # Baseline SANS fine-tuning : le backbone pre-entraine (arcface_ms1mv3) tel quel,
     # comme reference pour juger si un quelconque fine-tuning (real/synthetic/mixed)
     # apporte vraiment un gain -- pas de seed/checkpoint, deterministe, toujours evalue.
+    # Clé de terrain dynamique : "visible_d1" ou "ir_d1" selon la config.
+    terrain_key = f"{cfg['modality']}_{cfg['distance']}"
+
     baseline_weights = cfg["paths"].get("arcface_weights")
     if baseline_weights and Path(baseline_weights).exists():
-        rank1_baseline = evaluate(cfg, weights_path=baseline_weights)["visible_d1"]
+        rank1_baseline = evaluate(cfg, weights_path=baseline_weights)[terrain_key]
         log.info("RANK-1 baseline (sans fine-tuning) : %.4f", rank1_baseline)
     else:
         log.info("Baseline sans fine-tuning ignoree : paths.arcface_weights introuvable (%s)", baseline_weights)
@@ -126,7 +129,7 @@ def stage_evaluate(cfg: dict) -> None:
                 log.info("Pas de checkpoint pour %s (seed=%d) : 'train_recognition' doit tourner avant.",
                           condition, seed)
                 continue
-            rank1s.append(evaluate(cfg, weights_path=str(ckpt))["visible_d1"])
+            rank1s.append(evaluate(cfg, weights_path=str(ckpt))[terrain_key])
         if rank1s:
             mean = statistics.mean(rank1s)
             std = statistics.pstdev(rank1s) if len(rank1s) > 1 else 0.0

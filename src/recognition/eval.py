@@ -53,10 +53,10 @@ def evaluate(cfg: dict, weights_path: str) -> dict[str, float]:
 
     results: dict[str, float] = {}
     for modality, distance in cfg["eval"]["terrains"]:
-        if (modality, distance) != ("visible", "d1"):
+        if modality not in ("visible", "ir") or distance != "d1":
             raise NotImplementedError(
                 f"TODO(claude): évaluation non implémentée pour {modality}/{distance} "
-                "(hors périmètre actuel, cf. CLAUDE.md : visible -> d1 seulement).")
+                "(seuls visible/d1 et ir/d1 sont dans le périmètre actuel, cf. CLAUDE.md).")
 
         eval_cfg = {**cfg, "modality": modality, "distance": distance}
         pairs_c = list_pairs(eval_cfg, block="C")
