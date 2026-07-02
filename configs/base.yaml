@@ -130,6 +130,18 @@ generator:
     # ne garantit pas que les k=20 graines reellement utilisees par sample()
     # restent stables (limite identifiee le 2026-06-29).
     lora_scale_calibration_seeds: 3
+    # Filtre PAR IMAGE PENDANT la generation (2026-06-29, sur demande explicite) :
+    # chaque image est evaluee (cosinus ArcFace vs vraies cibles Bloc B, seuil
+    # fidelity.filter_cos_min) des sa generation -- rejetee -> supprimee, retentee
+    # avec une nouvelle graine, jusqu'a obtenir k images valides. Remplace le
+    # filtrage a posteriori (stage filter_synthetic, qui pouvait laisser une
+    # identite avec moins de k images utilisables au lieu d'en regenerer).
+    filter_during_generation: true
+    # Plafond de tentatives (= k * ce facteur) avant d'abandonner et de continuer
+    # avec moins de k images -- evite une boucle infinie si une identite ne peut
+    # pas produire d'image valide a ce lora_scale (log un avertissement explicite
+    # dans ce cas, cf. _sample_loop).
+    filter_max_attempts_factor: 3
   train:
     lr: 1.0e-4
     lr_scheduler: cosine      # constant -> cosine : decroit vers 0 plutot que rester

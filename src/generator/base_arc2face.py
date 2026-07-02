@@ -423,6 +423,22 @@ class Arc2FaceGenerator:
         # Aucun candidat sous le seuil pour toutes les graines : repli sur le plus prudent.
         return candidates[-1], trials
 
+    def _identity_reference_embedding(self, identity: str):
+        """Embedding ArcFace moyen des vraies cibles (Bloc B) de cette identité --
+        référence pour le filtre par image à la génération (même principe que
+        fidelity/filter.py, mais appliqué AVANT de compter un tirage comme valide,
+        pas après coup -- cf. demande 2026-06-29 : retenter avec une nouvelle
+        graine plutôt que de finir avec moins de k images utilisables)."""
+        import torch
+        from src.data.pairs import list_pairs
+        from src.generator.face_detect import load_aligned_face_tensor
+
+        real_paths = [p.target_path for p in list_pairs(self.cfg, block="B") if p.identity == identity]
+        tensors = [load_aligned_face_tensor(p, self._face_app) for p in real_paths]
+        with torch.no_grad():
+            emb = self._identity_embedder(torch.stack(tensors).to(self._device)).mean(dim=0, keepdim=True)
+        return emb / emb.norm(dim=-1, keepdim=True)
+
     # --------------------------------------------------------------------- sample
     def sample(self, mugshot_path: str, k: int) -> list[str]:
         """Génère k échantillons (diversité intra-classe) ; sauve sous paths.synth_dataset."""
@@ -440,7 +456,10 @@ class Arc2FaceGenerator:
         self._pipeline.vae.disable_tiling()
         identity = Path(mugshot_path).stem.split("_")[0]
         id_emb = self._id_embedding(mugshot_path)
-        prompt_embeds = self._project_for_conditioning(id_emb).repeat(k, 1, 1)
+        # (1, ...) -- identique pour chaque tirage (seul le bruit initial varie, via
+        # le generator par graine) ; pas repete par k : avec le filtre par image
+        # (cf. filter_during_generation), le nombre de TENTATIVES peut depasser k.
+        prompt_embeds = self._project_for_conditioning(id_emb)
 
         out_dir = Path(self.cfg["paths"]["synth_dataset"]) / identity
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -477,19 +496,45 @@ class Arc2FaceGenerator:
         }
         (out_dir / "lora_scale_info.json").write_text(json.dumps(manifest, indent=2))
 
+        # Filtre PAR IMAGE pendant la génération (2026-06-29) : chaque image est
+        # évaluée (cosinus ArcFace vs vraies cibles du Bloc B) DÈS sa génération --
+        # si elle échoue, elle est supprimée et retentée avec une nouvelle graine,
+        # jusqu'à obtenir k images valides (ou un nombre maximal de tentatives).
+        # Remplace le filtrage a posteriori (stage filter_synthetic, qui pouvait
+        # laisser une identité avec moins de k images utilisables).
+        filter_ref_emb = None
+        if sample_cfg.get("filter_during_generation", False):
+            filter_ref_emb = self._identity_reference_embedding(identity)
+
         scaled_params = self._apply_lora_scale(lora_scale)
         try:
-            paths = self._sample_loop(prompt_embeds, k, identity, out_dir, sample_cfg, guidance_strength, id_emb)
+            paths = self._sample_loop(prompt_embeds, k, identity, out_dir, sample_cfg, guidance_strength, id_emb,
+                                       filter_ref_emb)
         finally:
             self._restore_lora_scale(scaled_params, lora_scale)
         return paths
 
-    def _sample_loop(self, prompt_embeds, k, identity, out_dir, sample_cfg, guidance_strength, id_emb):
+    def _sample_loop(self, prompt_embeds, k, identity, out_dir, sample_cfg, guidance_strength, id_emb,
+                      filter_ref_emb=None):
+        """Génère jusqu'à k images ACCEPTÉES. Si filter_ref_emb est fourni (cf.
+        sample(), generator.sample.filter_during_generation), chaque image est
+        évaluée (cosinus ArcFace) dès sa génération : rejetée -> supprimée et
+        retentée avec une nouvelle graine, sans compter dans les k. Un nombre
+        maximal de tentatives (filter_max_attempts_factor * k) évite une boucle
+        infinie si une identité ne peut tout simplement pas produire d'image
+        valide à ce lora_scale."""
         import torch
+        from src.generator.face_detect import load_aligned_face_tensor
+
+        threshold = self.cfg["fidelity"]["filter_cos_min"]
+        max_attempts = k * sample_cfg.get("filter_max_attempts_factor", 3)
 
         paths = []
-        for idx in range(k):
-            generator = torch.Generator(device=self._device).manual_seed(idx)
+        attempt = 0
+        while len(paths) < k and attempt < max_attempts:
+            seed = attempt
+            attempt += 1
+            generator = torch.Generator(device=self._device).manual_seed(seed)
             callback_kwargs = {}
             if guidance_strength > 0:
                 callback_kwargs = dict(
@@ -502,7 +547,7 @@ class Arc2FaceGenerator:
             # gradient (réactivé localement via torch.enable_grad() dans le callback).
             with torch.no_grad() if guidance_strength == 0 else contextlib.nullcontext():
                 latents = self._pipeline(
-                    prompt_embeds=prompt_embeds[idx:idx + 1],
+                    prompt_embeds=prompt_embeds,
                     num_inference_steps=sample_cfg["num_inference_steps"],
                     guidance_scale=sample_cfg["guidance_scale"],
                     generator=generator, output_type="latent", **callback_kwargs).images
@@ -510,7 +555,21 @@ class Arc2FaceGenerator:
                 with torch.no_grad():
                     decoded = vae.decode((latents / vae.config.scaling_factor).to(vae.dtype)).sample
             image = self._pipeline.image_processor.postprocess(decoded, output_type="pil")[0]
-            path = out_dir / f"{identity}_{idx:03d}.png"
+            path = out_dir / f"{identity}_{len(paths):03d}.png"
             image.save(path)
+
+            if filter_ref_emb is not None:
+                tensor = load_aligned_face_tensor(str(path), self._face_app)
+                with torch.no_grad():
+                    emb = self._identity_embedder(tensor.unsqueeze(0).to(self._device))
+                    emb = emb / emb.norm(dim=-1, keepdim=True)
+                cos = (emb @ filter_ref_emb.T).item()
+                if cos < threshold:
+                    path.unlink()  # rejetee : supprimee, retentee avec une nouvelle graine
+                    continue
             paths.append(str(path))
+
+        if len(paths) < k:
+            log.warning("Identité %s : %d/%d images retenues après %d tentatives (filtre cosinus, seuil=%.2f)",
+                         identity, len(paths), k, attempt, threshold)
         return paths
