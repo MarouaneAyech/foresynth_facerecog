@@ -13,5 +13,14 @@ generator:
     # Comparaison cross-modale -> cosinus systematiquement < 0.45, tout est rejete.
     # Le filtrage d'identite reste fait a posteriori par stage fidelity/filter_synthetic.
     filter_during_generation: false
+# Post-traitement IR (stage ir_postprocess, après generate, avant fidelity).
+# Normalise les images RGB générées (incohérentes : certaines grises, d'autres
+# fade-couleur) vers le look des caméras IR SCface cam_6/cam_7 à d1 (4.20m).
+# sigma_blur et noise_std calibrés empiriquement -- à ajuster après inspection
+# visuelle des images traitées vs vraies images IR SCface d1.
+ir_postprocess:
+  sigma_blur: 1.5   # rayon flou gaussien en pixels (espace 512x512 généré)
+  noise_std: 0.02   # écart-type bruit capteur IR (espace [0,1])
+
 eval:
   terrains: [["ir","d1"]]

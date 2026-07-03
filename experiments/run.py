@@ -15,7 +15,7 @@ from src.utils.seed import set_seed
 
 log = get_logger()
 STAGES = ["smoke", "partition", "check_faces", "train_generator", "generate",
-          "filter_synthetic", "fidelity", "train_recognition", "evaluate"]
+          "ir_postprocess", "filter_synthetic", "fidelity", "train_recognition", "evaluate"]
 
 
 def stage_smoke(cfg: dict) -> None:
@@ -74,6 +74,14 @@ def stage_generate(cfg: dict) -> None:
             gen = build_generator(cfg)
         gen.sample(mugshot_path, k=k)
         log.info("Identité %s : %d échantillons générés", identity, k)
+
+
+def stage_ir_postprocess(cfg: dict) -> None:
+    """Post-traitement déterministe des images synthétiques IR (niveaux de gris +
+    flou + bruit capteur). Modifie les PNG in-place dans synth_dataset.
+    Ordre : après 'generate', avant 'fidelity'. Réservé à modality=ir."""
+    from src.generator.ir_postprocess import ir_postprocess_dataset
+    ir_postprocess_dataset(cfg)
 
 
 def stage_filter_synthetic(cfg: dict) -> None:
@@ -139,7 +147,7 @@ def stage_evaluate(cfg: dict) -> None:
 DISPATCH = {
     "smoke": stage_smoke, "partition": stage_partition, "check_faces": stage_check_faces,
     "train_generator": stage_train_generator, "generate": stage_generate,
-    "filter_synthetic": stage_filter_synthetic,
+    "ir_postprocess": stage_ir_postprocess, "filter_synthetic": stage_filter_synthetic,
     "fidelity": stage_fidelity, "train_recognition": stage_train_recognition,
     "evaluate": stage_evaluate,
 }
