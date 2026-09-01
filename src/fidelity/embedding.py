@@ -10,6 +10,7 @@ backbone ArcFace"), pas simplement redimensionnées -- cohérent avec recognitio
 """
 from __future__ import annotations
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from src.data.pairs import list_pairs
@@ -67,3 +68,60 @@ def mean_identity_cosine(cfg: dict) -> float:
             "Aucune image synthétique sous paths.synth_dataset pour le Bloc B : "
             "lancer l'étage 'generate' avant 'fidelity'.")
     return sum(per_identity_cos) / len(per_identity_cos)
+
+
+@dataclass
+class CosineDistribution:
+    mean: float
+    std: float
+    pct_below: float   # % d'images sous fidelity.filter_cos_min
+    n: int
+
+
+def identity_cosine_distribution(cfg: dict) -> CosineDistribution:
+    """Distribution, PAR IMAGE, du cosinus ArcFace entre chaque échantillon synthétique
+    et son identité source (Bloc B) -- même convention que le filtre par image
+    (fidelity/filter.py : cosinus vs la moyenne normalisée des embeddings réels de la
+    même identité), pour rester cohérente avec le seuil fidelity.filter_cos_min.
+
+    Complète mean_identity_cosine() (moyenne agrégée par identité, utilisée par le
+    gate global) en exposant la distribution nécessaire au tableau de fidélité de
+    l'article (moyenne, écart-type, % sous le seuil)."""
+    import torch
+
+    threshold = cfg["fidelity"]["filter_cos_min"]
+    real_by_id: dict[str, list[str]] = defaultdict(list)
+    for p in list_pairs(cfg, block="B"):
+        real_by_id[p.identity].append(p.target_path)
+
+    synth_root = Path(cfg["paths"]["synth_dataset"])
+    embedder = load_arcface_embedder(cfg)
+    device = next(embedder.parameters()).device
+    face_app = load_face_app(cfg)
+    cache_dir = cfg["paths"].get("aligned_cache")
+
+    cosines: list[float] = []
+    for identity, real_paths in sorted(real_by_id.items()):
+        synth_paths = sorted((synth_root / identity).glob("*.png"))
+        if not synth_paths:
+            continue
+        real_tensors = [load_aligned_face_tensor(p, face_app, cache_dir=cache_dir) for p in real_paths]
+        with torch.no_grad():
+            real_emb = embedder(torch.stack(real_tensors).to(device)).mean(dim=0, keepdim=True)
+            real_emb = real_emb / real_emb.norm(dim=-1, keepdim=True)
+            for synth_path in synth_paths:
+                tensor = load_aligned_face_tensor(str(synth_path), face_app, cache_dir=cache_dir)
+                emb = embedder(tensor.unsqueeze(0).to(device))
+                emb = emb / emb.norm(dim=-1, keepdim=True)
+                cosines.append((emb @ real_emb.T).item())
+
+    if not cosines:
+        raise RuntimeError(
+            "Aucune image synthétique sous paths.synth_dataset pour le Bloc B : "
+            "lancer l'étage 'generate' avant 'fidelity'.")
+
+    n = len(cosines)
+    mean = sum(cosines) / n
+    std = (sum((c - mean) ** 2 for c in cosines) / n) ** 0.5
+    pct_below = 100 * sum(1 for c in cosines if c < threshold) / n
+    return CosineDistribution(mean=mean, std=std, pct_below=pct_below, n=n)

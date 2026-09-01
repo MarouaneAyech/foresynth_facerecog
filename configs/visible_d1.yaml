@@ -2,5 +2,13 @@
 defaults: base
 modality: visible
 distance: d1
+generator:
+  sample:
+    # Aucun filtrage a posteriori pour les resultats de reconnaissance publies
+    # (chapitre4.tex, "Absence de filtrage a posteriori (limite assumee)") : le
+    # dataset visible/d1 original a ete genere avant l'ajout de ce filtre au code
+    # (defaut base.yaml passe a true le 2026-07-02). En cas de regeneration,
+    # desactiver explicitement pour rester coherent avec le protocole decrit.
+    filter_during_generation: false
 eval:
   terrains: [["visible","d1"]]   # d2/d3 saturés -> ignorés

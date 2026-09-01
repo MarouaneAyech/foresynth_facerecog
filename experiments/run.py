@@ -99,6 +99,12 @@ def stage_fidelity(cfg: dict) -> None:
     c = embedding.mean_identity_cosine(cfg)
     r = gate.decide(f, c, cfg)
     log.info("FIDELITY %s | %s", "PASS" if r.passed else "FAIL", r.reason)
+    # Distribution par image (moyenne, écart-type, % sous seuil) -- ce sont les
+    # chiffres attendus par le tableau de fidélité de l'article, que le gate
+    # go/no-go seul (mean_identity_cosine, agrégée par identité) ne donne pas.
+    dist = embedding.identity_cosine_distribution(cfg)
+    log.info("FIDELITY STATS | FID=%.2f | cosine=%.4f +/- %.4f (n=%d) | %.1f%% sous le seuil %.2f",
+              f, dist.mean, dist.std, dist.n, dist.pct_below, cfg["fidelity"]["filter_cos_min"])
 
 
 def stage_train_recognition(cfg: dict) -> None:
