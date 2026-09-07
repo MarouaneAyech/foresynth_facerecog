@@ -76,6 +76,8 @@ class CosineDistribution:
     std: float
     pct_below: float   # % d'images sous fidelity.filter_cos_min
     n: int
+    values: list[float]   # cosinus bruts par image -- necessaires pour un test
+                           # statistique contre une autre distribution (cf. gate.compare_to_baseline)
 
 
 def identity_cosine_distribution(cfg: dict) -> CosineDistribution:
@@ -124,4 +126,51 @@ def identity_cosine_distribution(cfg: dict) -> CosineDistribution:
     mean = sum(cosines) / n
     std = (sum((c - mean) ** 2 for c in cosines) / n) ** 0.5
     pct_below = 100 * sum(1 for c in cosines if c < threshold) / n
-    return CosineDistribution(mean=mean, std=std, pct_below=pct_below, n=n)
+    return CosineDistribution(mean=mean, std=std, pct_below=pct_below, n=n, values=cosines)
+
+
+def real_identity_cosine_baseline(cfg: dict) -> CosineDistribution:
+    """Distribution de référence : cosinus ArcFace ENTRE vraies images de surveillance
+    de la même identité (Bloc B), en leave-one-out (chaque image comparée à la moyenne
+    des AUTRES cibles réelles de son identité, jamais à elle-même).
+
+    Calibre ce qu'un cosinus "normal" représente dans ce domaine déjà dégradé,
+    indépendamment du générateur -- un cosinus synthétique bas n'est un défaut
+    d'identité que s'il est nettement sous CETTE baseline, pas sous un seuil
+    arbitraire (cf. baseline rank-1 réel très inférieur au mugshot : la difficulté
+    de reconnaissance sur de la surveillance dégradée est intrinsèque, pas
+    forcément un signe d'échec du générateur)."""
+    import torch
+
+    threshold = cfg["fidelity"]["filter_cos_min"]
+    real_by_id: dict[str, list[str]] = defaultdict(list)
+    for p in list_pairs(cfg, block="B"):
+        real_by_id[p.identity].append(p.target_path)
+
+    embedder = load_arcface_embedder(cfg)
+    device = next(embedder.parameters()).device
+    face_app = load_face_app(cfg)
+    cache_dir = cfg["paths"].get("aligned_cache")
+
+    cosines: list[float] = []
+    for identity, real_paths in sorted(real_by_id.items()):
+        if len(real_paths) < 2:
+            continue  # leave-one-out impossible avec une seule image réelle
+        tensors = [load_aligned_face_tensor(p, face_app, cache_dir=cache_dir) for p in real_paths]
+        with torch.no_grad():
+            embs = embedder(torch.stack(tensors).to(device))
+            embs = embs / embs.norm(dim=-1, keepdim=True)
+            for i in range(len(real_paths)):
+                others = torch.cat([embs[:i], embs[i + 1:]], dim=0).mean(dim=0, keepdim=True)
+                others = others / others.norm(dim=-1, keepdim=True)
+                cosines.append((embs[i:i + 1] @ others.T).item())
+
+    if not cosines:
+        raise RuntimeError(
+            "Pas assez d'images réelles par identité (Bloc B) pour la baseline leave-one-out.")
+
+    n = len(cosines)
+    mean = sum(cosines) / n
+    std = (sum((c - mean) ** 2 for c in cosines) / n) ** 0.5
+    pct_below = 100 * sum(1 for c in cosines if c < threshold) / n
+    return CosineDistribution(mean=mean, std=std, pct_below=pct_below, n=n, values=cosines)

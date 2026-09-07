@@ -105,6 +105,16 @@ def stage_fidelity(cfg: dict) -> None:
     dist = embedding.identity_cosine_distribution(cfg)
     log.info("FIDELITY STATS | FID=%.2f | cosine=%.4f +/- %.4f (n=%d) | %.1f%% sous le seuil %.2f",
               f, dist.mean, dist.std, dist.n, dist.pct_below, cfg["fidelity"]["filter_cos_min"])
+    # Baseline reel-vs-reel (leave-one-out, Bloc B) : calibre ce qu'un cosinus "normal"
+    # represente dans ce domaine deja degrade, independamment du generateur -- a comparer
+    # directement a la ligne FIDELITY STATS ci-dessus avant de conclure a un defaut d'identite.
+    baseline = embedding.real_identity_cosine_baseline(cfg)
+    log.info("FIDELITY BASELINE (reel vs reel, leave-one-out) | cosine=%.4f +/- %.4f (n=%d) | %.1f%% sous le seuil %.2f",
+              baseline.mean, baseline.std, baseline.n, baseline.pct_below, cfg["fidelity"]["filter_cos_min"])
+    # Decision finale : le synthetique est-il coherent avec le plancher reel-vs-reel,
+    # plutot que juge contre un seuil (fidelity.cos_min) jamais calibre empiriquement.
+    comparison = gate.compare_to_baseline(dist, baseline)
+    log.info("FIDELITY VERDICT | %s", comparison.reason)
 
 
 def stage_train_recognition(cfg: dict) -> None:
