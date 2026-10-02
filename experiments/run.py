@@ -129,6 +129,7 @@ def stage_evaluate(cfg: dict) -> None:
     import statistics
     from pathlib import Path
     from src.recognition.eval import evaluate
+    from src.recognition.naming import recognition_tag
     from src.utils.checkpoint import latest_checkpoint
 
     # Baseline SANS fine-tuning : le backbone pre-entraine (arcface_ms1mv3) tel quel,
@@ -147,7 +148,7 @@ def stage_evaluate(cfg: dict) -> None:
     for condition in cfg["recognition"]["conditions"]:
         rank1s = []
         for seed in cfg["seeds"]:
-            tag = f"recognition_{condition}_seed{seed}"
+            tag = recognition_tag(cfg, condition, seed)
             ckpt = latest_checkpoint(cfg["paths"]["checkpoints"], tag)
             if ckpt is None:
                 log.info("Pas de checkpoint pour %s (seed=%d) : 'train_recognition' doit tourner avant.",

@@ -26,7 +26,9 @@ from pathlib import Path
 
 from src.data.pairs import list_pairs
 from src.generator.face_detect import load_face_app, load_aligned_face_tensor
-from src.recognition.arcmargin import ArcMarginProduct
+from src.recognition.arcmargin import ArcFaceHead, ArcMarginProduct
+from src.recognition.lora import freeze_all_batchnorm, inject_lora
+from src.recognition.naming import recognition_tag
 from src.utils.arcface_backbone import EMBEDDING_SIZE, iresnet50, preprocess_for_arcface
 from src.utils.checkpoint import latest_checkpoint, load_checkpoint, resume_step, save_checkpoint
 from src.utils.logging import get_logger
@@ -59,6 +61,17 @@ def _get_lr(epoch: int, warmup_epochs: int, total_epochs: int, base_lr: float) -
         return base_lr * (epoch + 1) / max(1, warmup_epochs)
     progress = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
     return 0.5 * base_lr * (1 + math.cos(math.pi * min(progress, 1.0)))
+
+
+def _steps_per_epoch(rec_cfg: dict, batch_size: int, n_identities: int, surveillance_of: dict) -> int:
+    """legacy : ancienne definition (archive full_finetune, ~3 pas/epoque).
+    dataset : comme bari/papier ch.3 -- une epoque = 2 x (nb d'images de surveillance
+    du pool) tirages, soit autant de pas que le volume de donnees l'impose (le
+    synthetique ajoute au reel allonge donc l'entrainement, comme dans le papier)."""
+    if rec_cfg.get("sampler", "legacy") == "bari":
+        n_surv = sum(len(v) for v in surveillance_of.values())
+        return max(1, (2 * n_surv) // batch_size)  # drop_last, comme le DataLoader de bari
+    return max(1, n_identities // max(1, batch_size // 2))
 
 
 def _build_pools(cfg: dict, condition: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
@@ -130,16 +143,30 @@ def train(cfg: dict, condition: str, seed: int) -> str:
     weights_path = cfg["paths"].get("arcface_weights")
     if weights_path and Path(weights_path).exists():
         net.load_state_dict(torch.load(weights_path, map_location="cpu"))
-    trainable = _apply_scope(net, rec_cfg["scope"])
-    head = ArcMarginProduct(EMBEDDING_SIZE, num_classes=len(identities),
-                             scale=rec_cfg["arcmargin"]["scale"], margin=rec_cfg["arcmargin"]["margin"])
+    mechanism = rec_cfg.get("mechanism", "full_finetune")
+    if mechanism == "lora":
+        lora_cfg = rec_cfg["lora"]
+        net.requires_grad_(False)
+        n_conv, n_fc = inject_lora(net, r=lora_cfg["rank"], alpha=lora_cfg["alpha"],
+                                    target_layers=tuple(lora_cfg["target_layers"]),
+                                    include_fc=lora_cfg["include_fc"])
+        trainable = [p for p in net.parameters() if p.requires_grad]
+        log.info("LoRA r=%d alpha=%d : %d conv + %d fc adaptes, %d parametres entrainables",
+                  lora_cfg["rank"], lora_cfg["alpha"], n_conv, n_fc, sum(p.numel() for p in trainable))
+    elif mechanism == "full_finetune":
+        trainable = _apply_scope(net, rec_cfg["scope"])
+    else:
+        raise ValueError(f"recognition.mechanism inconnu : {mechanism} (full_finetune|lora)")
+    head_cls = ArcFaceHead if mechanism == "lora" else ArcMarginProduct
+    head = head_cls(EMBEDDING_SIZE, num_classes=len(identities),
+                    scale=rec_cfg["arcmargin"]["scale"], margin=rec_cfg["arcmargin"]["margin"])
     net, head = net.to(device), head.to(device)
 
     optimizer = torch.optim.AdamW(trainable + list(head.parameters()),
                                    lr=rec_cfg["lr"], weight_decay=rec_cfg["weight_decay"])
 
     ckpt_dir = cfg["paths"]["checkpoints"]
-    tag = f"recognition_{condition}_seed{seed}"
+    tag = recognition_tag(cfg, condition, seed)
     step = resume_step(ckpt_dir, tag)
     ckpt_path = latest_checkpoint(ckpt_dir, tag)
     if ckpt_path is not None:
@@ -150,20 +177,41 @@ def train(cfg: dict, condition: str, seed: int) -> str:
         log.info("[%s seed=%d] reprise depuis step=%d (%s)", condition, seed, step, ckpt_path)
 
     batch_size = rec_cfg["batch_size"]
-    steps_per_epoch = max(1, len(identities) // max(1, batch_size // 2))
+    steps_per_epoch = _steps_per_epoch(rec_cfg, batch_size, len(identities), surveillance_of)
     total_epochs = rec_cfg["epochs"]
     max_steps = total_epochs * steps_per_epoch
     hflip_prob = rec_cfg.get("hflip_prob", 0.0)
     warmup_epochs = rec_cfg.get("warmup_epochs", 0)
+    sampler = rec_cfg.get("sampler", "legacy")
+    log.info("[%s seed=%d] mecanisme=%s sampler=%s : %d pas/epoque, %d pas au total",
+              condition, seed, mechanism, sampler, steps_per_epoch, max_steps)
 
-    rng = random.Random(seed)
-    saved_path = ckpt_path
-    while step < max_steps:
-        epoch = step // steps_per_epoch
-        lr = _get_lr(epoch, warmup_epochs, total_epochs, rec_cfg["lr"])
-        for g in optimizer.param_groups:
-            g["lr"] = lr
+    if sampler == "bari":
+        # Echantillonneur du ch.3 (bari/data/train_loader.py) : tirage AVEC remise sur
+        # l'ensemble des images, mugshots surponderes pour une proportion anchor_ratio
+        # (50/50 en esperance), 2 x n_surveillance tirages par epoque.
+        samples = []
+        for identity in identities:
+            samples.append((mugshot_of[identity][0], label_of[identity], True))
+            samples += [(p, label_of[identity], False) for p in surveillance_of[identity]]
+        n_surv = sum(1 for s in samples if not s[2])
+        anchor = rec_cfg["anchor_ratio"]
+        w_mug = n_surv * anchor / (1.0 - anchor) / len(identities)
+        sample_weights = torch.tensor([w_mug if s[2] else 1.0 for s in samples], dtype=torch.double)
+        epoch_idx = {"epoch": -1, "idx": None}
 
+    def next_batch(step: int, epoch: int):
+        if sampler == "bari":
+            if epoch_idx["epoch"] != epoch:
+                g = torch.Generator().manual_seed(seed * 1000 + epoch)
+                epoch_idx["idx"] = torch.multinomial(sample_weights, 2 * n_surv, replacement=True, generator=g)
+                epoch_idx["epoch"] = epoch
+            pos = step % steps_per_epoch
+            chosen = [samples[i] for i in epoch_idx["idx"][pos * batch_size:(pos + 1) * batch_size].tolist()]
+            step_rng = random.Random(seed * 10_000_000 + step)
+            tensors = [aligned_cache[p].flip(-1) if step_rng.random() < hflip_prob else aligned_cache[p]
+                       for p, _, _ in chosen]
+            return tensors, [lab for _, lab, _ in chosen]
         imgs, labels = [], []
         for _ in range(batch_size):
             identity = rng.choice(identities)
@@ -173,6 +221,23 @@ def train(cfg: dict, condition: str, seed: int) -> str:
                 tensor = tensor.flip(-1)  # flip horizontal (augmentation, cf. code B1)
             imgs.append(tensor)
             labels.append(label_of[identity])
+        return imgs, labels
+
+    # LoRA : BN figees au sens des statistiques (papier ch.3, §3.3) -- requires_grad=False
+    # ne suffit pas. Aucun net.train() n'est rappele plus bas, un seul appel suffit.
+    net.train()
+    if mechanism == "lora":
+        log.info("BatchNorm gelees (eval) : %d modules", freeze_all_batchnorm(net))
+
+    rng = random.Random(seed)
+    saved_path = ckpt_path
+    while step < max_steps:
+        epoch = step // steps_per_epoch
+        lr = _get_lr(epoch, warmup_epochs, total_epochs, rec_cfg["lr"])
+        for g in optimizer.param_groups:
+            g["lr"] = lr
+
+        imgs, labels = next_batch(step, epoch)
 
         batch = torch.stack(imgs).to(device)
         labels_t = torch.tensor(labels, device=device)
@@ -191,7 +256,12 @@ def train(cfg: dict, condition: str, seed: int) -> str:
                       condition, seed, step, max_steps, epoch, lr, loss.item())
         if step % rec_cfg["ckpt_every"] == 0 or step == max_steps:
             saved_path = save_checkpoint(
-                {"net": net.state_dict(), "head": head.state_dict(), "optimizer": optimizer.state_dict()},
+                {"net": net.state_dict(), "head": head.state_dict(), "optimizer": optimizer.state_dict(),
+                 "mechanism": mechanism,
+                 "lora_rank": rec_cfg["lora"]["rank"] if mechanism == "lora" else 0,
+                 "lora_alpha": rec_cfg["lora"]["alpha"] if mechanism == "lora" else 0,
+                 "lora_target_layers": ",".join(rec_cfg["lora"]["target_layers"]) if mechanism == "lora" else "",
+                 "lora_include_fc": bool(rec_cfg["lora"]["include_fc"]) if mechanism == "lora" else False},
                 ckpt_dir, tag, step)
 
     return str(saved_path)

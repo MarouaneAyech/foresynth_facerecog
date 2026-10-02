@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from src.data.pairs import list_pairs
 from src.generator.face_detect import load_aligned_face_tensor, load_face_app
+from src.recognition.lora import inject_lora
 from src.utils.arcface_backbone import iresnet50, preprocess_for_arcface
 from src.utils.logging import get_logger
 
@@ -44,9 +45,14 @@ def evaluate(cfg: dict, weights_path: str) -> dict[str, float]:
     import torch
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    net = iresnet50().to(device)
+    net = iresnet50()
     state = torch.load(weights_path, map_location="cpu")
+    if state.get("mechanism") == "lora":
+        inject_lora(net, r=state["lora_rank"], alpha=state["lora_alpha"],
+                    target_layers=tuple(state["lora_target_layers"].split(",")),
+                    include_fc=state["lora_include_fc"])
     net.load_state_dict(state["net"] if "net" in state else state)
+    net = net.to(device)
     net.eval()
     face_app = load_face_app(cfg)
     cache_dir = cfg["paths"].get("aligned_cache")

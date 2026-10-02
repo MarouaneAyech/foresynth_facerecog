@@ -51,9 +51,13 @@ fidelity`) avant de considérer ces résultats de reconnaissance comme validés 
 5. `fidelity/` — garde-fou **AVANT toute reconnaissance** : FID + cosinus ArcFace (synth vs vrai
    du Bloc B) → go/no-go (stage `fidelity`) ; filtre par image complémentaire (stage
    `filter_synthetic`, retire les images sous un seuil de cosinus individuel).
-6. `recognition/` — RECETTE B1 INCHANGÉE : scope=layer3+4, AdamW lr=1e-4, ancrage 50/50
-   mugshot/surveillance, 3 seeds. Conditions : real / synthetic / mixed (`mixed` avec
-   `recognition.synthetic_ratio` variable = le levier de l'ablation dosage réel/synthétique).
+6. `recognition/` — RECETTE DU CHAPITRE 3 (papier `paper_VF.pdf`, code `D:\projects\bari`) :
+   **LoRA r=32 (alpha=64) sur les conv 3x3 de layer3+layer4 + fc, BatchNorm gelées via `.eval()`**
+   (`requires_grad=False` ne fige PAS les stats BN), AdamW lr=1e-4, ancrage 50/50, 3 seeds.
+   `recognition.mechanism: full_finetune` = ancienne recette B1, **archive** pour la comparaison
+   finale uniquement (cf. commentaire de `configs/base.yaml` pour la reproduire). Ne pas rouvrir
+   le rang : hérité du ch.3. Conditions : real / mixed (`recognition.synthetic_ratio` = levier de
+   l'ablation dosage). Tags de checkpoints : `src/recognition/naming.py`.
 7. `recognition/eval.py` — rank-1 par terrain sur Bloc C.
 
 ## Garde-fous scientifiques (à respecter dans le code)
