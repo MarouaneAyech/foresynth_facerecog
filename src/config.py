@@ -56,6 +56,26 @@ def _resolve(cfg: dict) -> dict:
     return out
 
 
+def apply_overrides(cfg: dict, items: list[str]) -> dict:
+    """Applique des surcharges 'a.b.c=valeur' (valeur lue en YAML : 0.5, true, [7,42]).
+    Utilisé par le notebook (cellule Paramètres) via `run.py --set` : les choix de
+    l'expérience sont explicites, tracés (runs_log.jsonl) et n'exigent pas d'éditer un YAML."""
+    for item in items:
+        if "=" not in item:
+            raise ValueError(f"Surcharge invalide (attendu cle=valeur) : {item!r}")
+        dotted, raw = item.split("=", 1)
+        parts = dotted.strip().split(".")
+        node = cfg
+        for part in parts[:-1]:
+            if not isinstance(node.get(part), dict):
+                raise KeyError(f"Cle inconnue dans la config : {dotted!r} (manque '{part}')")
+            node = node[part]
+        if parts[-1] not in node:
+            raise KeyError(f"Cle inconnue dans la config : {dotted!r}")
+        node[parts[-1]] = yaml.safe_load(raw)
+    return cfg
+
+
 def load_config(path: str | Path) -> dict:
     path = Path(path)
     raw = yaml.safe_load(path.read_text())

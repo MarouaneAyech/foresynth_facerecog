@@ -8,7 +8,7 @@ Usage:
 """
 from __future__ import annotations
 import argparse
-from src.config import load_config
+from src.config import apply_overrides, load_config
 from src.utils.logging import get_logger
 from src.utils.paths import ensure_dirs
 from src.utils.seed import set_seed
@@ -125,6 +125,26 @@ def stage_train_recognition(cfg: dict) -> None:
             log.info("Entraînement %s/seed=%d terminé -> %s", cond, seed, path)
 
 
+def _append_result(cfg: dict, condition: str, seed: int, rank1: float, ckpt) -> None:
+    """Une ligne par (checkpoint evalue) dans outputs/results_recognition.csv (Drive) :
+    alimente directement le tableau de dosage, sans recopier les logs a la main."""
+    import csv
+    import datetime
+    from pathlib import Path
+    rec = cfg["recognition"]
+    path = Path(cfg["paths"]["outputs"]) / "results_recognition.csv"
+    new = not path.exists()
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["time", "terrain", "mechanism", "condition", "synthetic_ratio",
+                        "seed", "rank1", "checkpoint"])
+        w.writerow([datetime.datetime.now().isoformat(timespec="seconds"),
+                    f"{cfg['modality']}_{cfg['distance']}", rec.get("mechanism", "full_finetune"),
+                    condition, rec.get("synthetic_ratio") if condition == "mixed" else "",
+                    seed, f"{rank1:.4f}", Path(ckpt).name])
+
+
 def stage_evaluate(cfg: dict) -> None:
     import statistics
     from pathlib import Path
@@ -154,7 +174,9 @@ def stage_evaluate(cfg: dict) -> None:
                 log.info("Pas de checkpoint pour %s (seed=%d) : 'train_recognition' doit tourner avant.",
                           condition, seed)
                 continue
-            rank1s.append(evaluate(cfg, weights_path=str(ckpt))[terrain_key])
+            rank1 = evaluate(cfg, weights_path=str(ckpt))[terrain_key]
+            rank1s.append(rank1)
+            _append_result(cfg, condition, seed, rank1, ckpt)
         if rank1s:
             mean = statistics.mean(rank1s)
             std = statistics.pstdev(rank1s) if len(rank1s) > 1 else 0.0
@@ -170,21 +192,53 @@ DISPATCH = {
 }
 
 
+def _guard_drive_mounted(cfg: dict) -> None:
+    """Sans Drive monte, ensure_dirs creerait des dossiers LOCAUX sous /content/drive
+    (puis plus aucun montage possible, checkpoints 'introuvables') -- incident vecu."""
+    import os
+    root = str(cfg["paths"]["drive_root"])
+    if root.startswith("/content/drive") and os.path.isdir("/content") \
+            and not os.path.ismount("/content/drive") \
+            and not os.environ.get("FORENSIC_SYNTH_SKIP_MOUNT_CHECK"):
+        raise SystemExit("Google Drive n'est pas monte sur /content/drive : montez-le (bon compte) "
+                         "avant de lancer un stage. (Contournement : FORENSIC_SYNTH_SKIP_MOUNT_CHECK=1)")
+
+
+def _record_run(cfg: dict, args) -> None:
+    """Trace persistante (Drive) des choix reels de chaque lancement : config effective
+    complete + ligne dans runs_log.jsonl."""
+    import json
+    import datetime
+    from pathlib import Path
+    ckpt = Path(cfg["paths"]["checkpoints"])
+    stamp = datetime.datetime.now().isoformat(timespec="seconds")
+    (ckpt / f"config_used_{args.stage}_{cfg['modality']}_{cfg['distance']}.json").write_text(
+        json.dumps(cfg, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    with open(Path(cfg["paths"]["outputs"]) / "runs_log.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"time": stamp, "stage": args.stage, "config": args.config,
+                            "set": args.set}, ensure_ascii=False) + "\n")
+
+
 def main() -> None:
     from src.utils.logging import attach_file_handler
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--stage", required=True, choices=STAGES)
+    ap.add_argument("--set", action="append", default=[], metavar="CLE=VALEUR",
+                    help="surcharge de config (ex. recognition.synthetic_ratio=0.2) ; repetable")
     args = ap.parse_args()
-    cfg = load_config(args.config)
+    cfg = apply_overrides(load_config(args.config), args.set)
     set_seed(cfg.get("seed", 42))
+    _guard_drive_mounted(cfg)
     ensure_dirs(cfg)
     # Copie persistante sur Drive (cf. CLAUDE.md), en plus de la console -- la sortie
     # de cellule Colab seule se perd si la session coupe sans sauvegarde du notebook.
     attach_file_handler(log, cfg["paths"]["checkpoints"],
                          f"log_{args.stage}_{cfg['modality']}_{cfg['distance']}.txt")
-    log.info("STAGE=%s CONFIG=%s (%s/%s)", args.stage, args.config, cfg["modality"], cfg["distance"])
+    log.info("STAGE=%s CONFIG=%s (%s/%s) surcharges=%s", args.stage, args.config,
+              cfg["modality"], cfg["distance"], args.set or "aucune")
+    _record_run(cfg, args)
     DISPATCH[args.stage](cfg)
 
 
