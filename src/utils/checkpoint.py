@@ -28,7 +28,13 @@ def save_checkpoint(state: dict[str, Any], ckpt_dir: str | Path, tag: str, step:
     tmp_path = path.with_suffix(".ckpt.tmp")
     torch.save(state, tmp_path)
     tmp_path.replace(path)
-    meta = {k: v for k, v in state.items() if isinstance(v, (int, float, str, bool))}
+    # Seul le checkpoint le plus recent est conserve (espace Drive) : le nouveau est
+    # integralement ecrit (replace atomique) AVANT de supprimer les anciens, donc une
+    # coupure en cours d'ecriture laisse toujours un checkpoint valide pour la reprise.
+    for old in d.glob(f"{tag}_step*.ckpt"):
+        if old != path and old.name < path.name:  # step sur 7 chiffres : ordre lexicographique = ordre des pas
+            old.unlink()
+    meta ={k: v for k, v in state.items() if isinstance(v, (int, float, str, bool))}
     meta_path = d / f"{tag}_latest.json"
     tmp_meta = meta_path.with_suffix(".json.tmp")
     tmp_meta.write_text(json.dumps({"step": step, "path": str(path), "meta": meta}, indent=2))
