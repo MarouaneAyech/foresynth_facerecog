@@ -17,6 +17,8 @@ modèle pré-entraîné.
 
 Usage (depuis la racine du projet, avec .venv-analysis) :
     .venv-analysis/Scripts/python analysis/extract_embeddings.py --terrain visible_d1 --baseline
+    .venv-analysis/Scripts/python analysis/extract_embeddings.py --terrain ir_d1 --baseline \
+        --ckpt-dir "checkpoints/ir d1"
 """
 from __future__ import annotations
 
@@ -51,13 +53,15 @@ def cache_file(image_path: str | Path, cache_dir: Path, size: int = 112) -> Path
     return cache_dir / f"{key}.pt"
 
 
-def load_tensors(paths: list[str], cache_dir: Path) -> torch.Tensor:
+def load_tensors(paths: list[str], cache_dirs: list[Path]) -> torch.Tensor:
+    """Cherche chaque image alignée dans les dossiers de cache, dans l'ordre."""
     tensors = []
     for p in paths:
-        f = cache_file(p, cache_dir)
-        if not f.exists():
-            raise FileNotFoundError(f"Entrée absente du cache d'alignement : {p}\n  (clé {f.name})")
-        tensors.append(torch.load(f))
+        found = next((f for d in cache_dirs if (f := cache_file(p, d)).exists()), None)
+        if found is None:
+            raise FileNotFoundError(
+                f"Entrée absente du cache d'alignement : {p}\n  (clé {cache_file(p, cache_dirs[0]).name})")
+        tensors.append(torch.load(found))
     return torch.stack(tensors)
 
 
@@ -104,14 +108,18 @@ def main() -> None:
     ap.add_argument("--only", nargs="*", default=[], help="sous-chaînes de tags à traiter")
     ap.add_argument("--baseline", action="store_true", help="évalue aussi le modèle non adapté")
     ap.add_argument("--include-non-lora", action="store_true")
+    ap.add_argument("--ckpt-dir", default=None,
+                    help="dossier des checkpoints (défaut : paths.checkpoints de la config)")
+    ap.add_argument("--cache-dir", action="append", default=None,
+                    help="dossier de cache d'alignement, répétable (défaut : paths.aligned_cache puis aligned_cache_ir)")
     ap.add_argument("--out", default=str(ROOT / "analysis" / "outputs" / "embeddings"))
     ap.add_argument("--force", action="store_true", help="recalcule les fichiers existants")
     args = ap.parse_args()
 
     torch.set_num_threads(max(1, os.cpu_count() or 1))
     cfg = load_config(ROOT / "configs" / f"{args.terrain}.yaml")
-    ckpt_dir = Path(cfg["paths"]["checkpoints"])
-    cache_dir = Path(cfg["paths"]["aligned_cache"])
+    ckpt_dir = Path(args.ckpt_dir or cfg["paths"]["checkpoints"])
+    cache_dirs = [Path(d) for d in (args.cache_dir or [cfg["paths"]["aligned_cache"], ROOT / "aligned_cache_ir"])]
     out_dir = Path(args.out) / args.terrain
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -126,8 +134,8 @@ def main() -> None:
         probe_paths.append(p.target_path)
         probe_ids.append(p.identity)
     probe_cam = [int(re.search(r"_cam(\d)_", Path(p).name).group(1)) for p in probe_paths]
-    gallery_x = load_tensors(gallery_paths, cache_dir)
-    probe_x = load_tensors(probe_paths, cache_dir)
+    gallery_x = load_tensors(gallery_paths, cache_dirs)
+    probe_x = load_tensors(probe_paths, cache_dirs)
     print(f"{args.terrain} : {len(gallery_ids)} identités en galerie, {len(probe_ids)} probes")
 
     checkpoints = find_checkpoints(ckpt_dir, args.only, args.include_non_lora)

@@ -11,6 +11,9 @@ traitées ; les entrées déjà présentes dans le cache ne sont pas recalculée
 La clé de chaque entrée dépend du chemin de l'IMAGE source (et non du dossier du cache) :
 choisir un autre dossier avec --cache-dir ne change donc pas les clés.
 
+Avec --synthetic, les images synthétiques des identités du bloc sont aussi traitées (utile
+pour les figures de fidélité : bloc B + synthétique).
+
 Exemple (cellule Colab, Drive monté, FORENSIC_SYNTH_ROOT défini, depuis la racine du dépôt) :
     !python analysis/build_aligned_cache.py --config configs/ir_d1.yaml --block C \
         --cache-dir /content/drive/MyDrive/forensic-synth/aligned_cache_ir
@@ -37,6 +40,8 @@ def main() -> None:
     ap.add_argument("--block", default="C", choices=["A", "B", "C"])
     ap.add_argument("--cache-dir", default=None,
                     help="dossier du cache à remplir (défaut : paths.aligned_cache de la config)")
+    ap.add_argument("--synthetic", action="store_true",
+                    help="ajoute les images synthétiques (paths.synth_dataset) des identités du bloc")
     ap.add_argument("--zip", default="/content/aligned_cache_nouveaux.zip")
     args = ap.parse_args()
 
@@ -45,10 +50,15 @@ def main() -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     paths: list[str] = []
-    for p in list_pairs(cfg, block=args.block):
+    pairs = list_pairs(cfg, block=args.block)
+    for p in pairs:
         for q in (p.mugshot_path, p.target_path):
             if q not in paths:
                 paths.append(q)
+    if args.synthetic:
+        synth_root = Path(cfg["paths"]["synth_dataset"])
+        for identity in sorted({p.identity for p in pairs}):
+            paths += [str(f) for f in sorted((synth_root / identity).glob("*.png"))]
     todo = [p for p in paths if not _cache_path(str(cache_dir), p, 112).exists()]
     print(f"{args.config} bloc {args.block} : {len(paths)} images, {len(todo)} absentes du cache")
     if not todo:

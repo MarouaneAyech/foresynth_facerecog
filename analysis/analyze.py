@@ -239,11 +239,16 @@ def main() -> None:
                     ha="left", va="bottom")
             ax.text(-3, gen["baseline"][1] - 0.004, "Baseline (imposteur)", color=ACCENT2, fontsize=9,
                     ha="left", va="top")
-        ax.text(xs[-1] + 2, g[-1], "Genuine", color=ACCENT, va="center", fontsize=10)
-        ax.text(xs[-1] + 2, im[-1], "Imposteur (max)", color=ACCENT2, va="center", fontsize=10)
+        # étiquettes en bout de courbe, écartées verticalement quand les deux courbes se rejoignent
+        up_g = g[-1] >= im[-1]
+        ax.text(xs[-1] + 2, g[-1] + (0.004 if up_g else -0.004), "Genuine", color=ACCENT,
+                va="bottom" if up_g else "top", fontsize=10)
+        ax.text(xs[-1] + 2, im[-1] + (-0.004 if up_g else 0.004), "Imposteur (max)", color=ACCENT2,
+                va="top" if up_g else "bottom", fontsize=10)
         ax.set_xlim(-4, 126)
         ax.set_xticks(range(0, 101, 10))
-        ax.set_yticks(np.arange(0.10, 0.41, 0.05))
+        lo, hi = min(g + im), max(g + im)
+        ax.set_yticks(np.arange(np.floor(lo * 20) / 20, hi + 0.05, 0.05))
         ax.yaxis.set_major_formatter(fr2)
         ax.set_xlabel("Proportion de synthétique ajoutée au réel (%)")
         ax.set_ylabel("Similarité cosinus moyenne")
